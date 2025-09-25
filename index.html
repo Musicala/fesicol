@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Alianza FESICOL · Musicala</title>
+
+  <!-- Fuentes y estilos -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Tema (lo actualiza app.js con el JSON) -->
+  <meta name="theme-color" content="#0C41C4" />
+  <meta name="color-scheme" content="light only" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">
+      <img src="logo.png" alt="Logo Musicala" class="logo" />
+      <div class="brand-text">
+        <h1 id="title">Alianza FESICOL</h1>
+        <p id="subtitle" class="muted">Gestión integral del convenio</p>
+      </div>
+    </div>
+
+    <div class="quick-meta">
+      <span class="badge" id="periodoBadge">Periodo</span>
+      <span class="dot"></span>
+      <span class="muted" id="lastUpdated">Actualizado: —</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Info principal -->
+    <section class="hero-card" id="introCard" hidden>
+      <h2 id="introTitle">Alianza y alcance</h2>
+      <p id="introLead" class="lead"></p>
+      <ul id="introBullets" class="bullets"></ul>
+    </section>
+
+    <!-- Acciones principales -->
+    <section>
+      <div class="section-head">
+        <h3>Panel de acciones</h3>
+        <div class="filters">
+          <button class="chip active" data-filter="all">Todo</button>
+          <button class="chip" data-filter="operativo">Operativo</button>
+          <button class="chip" data-filter="académico">Académico</button>
+          <button class="chip" data-filter="administrativo">Administrativo</button>
+        </div>
+      </div>
+
+      <div id="actionsGrid" class="grid"></div>
+    </section>
+
+    <!-- KPIs / estado -->
+    <section id="kpisSection" hidden>
+      <div class="section-head">
+        <h3>Estado y seguimiento</h3>
+      </div>
+      <div class="kpis" id="kpisGrid"></div>
+    </section>
+  </main>
+
+  <!-- Modal de imagen (cronograma u otras) -->
+  <!-- Modal de imagen (solo visualización) -->
+    <dialog id="imgModal">
+    <div class="modal-head">
+        <h4 id="imgModalTitle">Vista</h4>
+        <button class="icon-btn" id="closeModal" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="modal-body">
+        <img id="modalImage" alt="Vista de soporte" />
+    </div>
+    </dialog>
+
+  <!-- Modal de tabla (CSV) -->
+  <dialog id="tableModal">
+    <div class="modal-head">
+      <h4 id="tableModalTitle">Datos</h4>
+      <button class="icon-btn" id="closeTableModal" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="table-tools">
+        <input id="tableSearch" type="search" placeholder="Buscar..." aria-label="Buscar en la tabla" />
+        <a id="downloadCSV" class="btn secondary" target="_blank" rel="noopener">Descargar CSV</a>
+      </div>
+      <div class="table-wrap">
+        <table id="dataTable" class="data-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+        <div id="tableEmpty" class="muted" style="display:none;">Sin resultados.</div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Modal: Agregar inscripción -->
+  <dialog id="addModal">
+    <div class="modal-head">
+      <h4>Agregar inscripción</h4>
+      <button class="icon-btn" id="closeAddModal" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="addForm" class="form">
+        <div class="grid-2">
+          <label>Mes
+            <input id="addMes" type="month" required />
+          </label>
+          <label>Estudiante (base oficial)
+            <input id="addNombreInscrito" list="listaEstudiantes" placeholder="Empieza a escribir..." required />
+            <datalist id="listaEstudiantes"></datalist>
+          </label>
+        </div>
+        <div class="grid-2">
+          <label>Nombre Asociado
+            <input id="addNombreAsociado" placeholder="Se autocompleta" required />
+          </label>
+          <label>Curso/Instrumento
+            <input id="addCurso" placeholder="Se autocompleta" required />
+          </label>
+        </div>
+        <label>Teléfono
+          <input id="addTelefono" inputmode="tel" placeholder="Se autocompleta" required />
+        </label>
+
+        <div class="form-row">
+          <button type="submit" class="btn">Guardar inscripción</button>
+        </div>
+        <small class="muted">Se guarda en la hoja <b>Inscripciones 2025</b>.</small>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- Modal: Importar CSV -->
+  <dialog id="importModal">
+    <div class="modal-head">
+      <h4>Importar inscripciones (CSV)</h4>
+      <button class="icon-btn" id="closeImportModal" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="importForm" class="form">
+        <div class="grid-2">
+          <label>Mes para todas las filas
+            <input id="impMes" type="month" required />
+          </label>
+          <label>Archivo CSV
+            <input id="impFile" type="file" accept=".csv,text/csv" required />
+          </label>
+        </div>
+        <details>
+          <summary>Cabeceras esperadas (flexibles)</summary>
+          <p class="muted">
+            Intentamos mapear automáticamente estas columnas (no importa mayúsculas):
+            <code>Nombre Asociado</code>, <code>Nombre Inscrito</code>, <code>Curso/Instrumento</code>
+            (o <code>Instrumento base</code>/<code>Modalidad/Curso</code>), <code>Teléfono</code>.
+          </p>
+        </details>
+        <div class="table-wrap" style="margin-top:8px;">
+          <table class="data-table" id="previewTable">
+            <thead></thead><tbody></tbody>
+          </table>
+        </div>
+        <div class="form-row">
+          <button type="submit" class="btn">Subir todo</button>
+        </div>
+        <small class="muted">Se insertan filas nuevas en <b>Inscripciones 2025</b>.</small>
+      </form>
+    </div>
+  </dialog>
+
+  <footer class="site-footer">
+    <small id="footerNote">Musicala · FESICOL</small>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

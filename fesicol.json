@@ -1,0 +1,123 @@
+{
+  "meta": {
+    "title": "Alianza FESICOL · Musicala",
+    "subtitle": "Gestión integral del convenio",
+    "period": "2025",
+    "last_updated": "2025-09-25",
+    "themeColor": "#0C41C4"
+  },
+  "intro": {
+    "title": "Alcance del convenio",
+    "lead": "Tablero central para cronograma, inscripciones y seguimiento operativo de la alianza con FESICOL.",
+    "bullets": [
+      "Cronograma oficial visible.",
+      "Listado de estudiantes desde Google Sheets (CSV).",
+      "Formulario simple para agregar inscripciones."
+    ]
+  },
+  "assets": {
+    "cronograma_image": "cronogramafesicol.jpg"
+  },
+  "api": {
+    "baseUrl": "https://script.google.com/macros/s/AKfycbxFgX3fuRHLHyEMYR4O-2sjm_z-70CPBXDbiIp14SGZHL_dTdUZ8mVhTkvNZaYuQFrE/exec"
+  },
+  "datasets": {
+    "estudiantes_csv": {
+      "title": "Estudiantes FESICOL",
+      "src": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRf0gO4PUvYt0uORO-XwSnyfBRPFkmOCnf_ThQkFSxlSgch_a8dr8I0VjcJpfNSCSliUOMNioojFP15/pub?gid=0&single=true&output=csv" 
+    }
+  },
+  "actions": [
+    {
+      "id": "ver_cronograma",
+      "title": "Ver cronograma",
+      "description": "Visualiza el cronograma oficial del convenio.",
+      "kind": "operativo",
+      "action": { "type": "image_modal", "title": "Cronograma FESICOL", "src": "cronogramafesicol.jpg" },
+      "tags": ["agenda", "operativo"],
+      "icon": "🗓️"
+    },
+    {
+      "id": "ver_estudiantes",
+      "title": "Listado de estudiantes",
+      "description": "Consulta y filtra el listado desde Google Sheets (CSV).",
+      "kind": "operativo",
+      "action": { "type": "csv_table", "dataset": "estudiantes_csv" },
+      "tags": ["estudiantes", "csv"],
+      "icon": "👥"
+    },
+    {
+      "id": "add_inscripcion",
+      "title": "Agregar inscripción",
+      "description": "Selecciona mes, busca un estudiante (base oficial) y guarda.",
+      "kind": "operativo",
+      "action": { "type": "add_form" },
+      "tags": ["inscripciones", "form"],
+      "icon": "➕"
+    },
+    {
+      "id": "programacion",
+      "title": "Programación semanal",
+      "description": "Horarios, salones y docentes asignados.",
+      "kind": "operativo",
+      "action": { "type": "link", "href": "#" },
+      "tags": ["horarios"],
+      "icon": "📅"
+    },
+    {
+      "id": "actas",
+      "title": "Actas y compromisos",
+      "description": "Repositorio de actas, acuerdos y seguimientos.",
+      "kind": "administrativo",
+      "action": { "type": "link", "href": "#" },
+      "tags": ["documentos"],
+      "icon": "📝"
+    },
+    {
+      "id": "novedades",
+      "title": "Novedades & PQRS",
+      "description": "Reporte y seguimiento de novedades.",
+      "kind": "administrativo",
+      "action": { "type": "link", "href": "#" },
+      "tags": ["formulario"],
+      "icon": "📮"
+    },
+    {
+      "id": "material_academico",
+      "title": "Material académico",
+      "description": "Guías, repertorios y lineamientos.",
+      "kind": "académico",
+      "action": { "type": "link", "href": "#" },
+      "tags": ["contenidos"],
+      "icon": "📚"
+    },
+    {
+      "id": "evaluaciones",
+      "title": "Evaluaciones",
+      "description": "Formatos e informes por estudiante/grupo.",
+      "kind": "académico",
+      "action": { "type": "link", "href": "#" },
+      "tags": ["seguimiento"],
+      "icon": "✅"
+    },
+    {
+      "id": "facturacion",
+      "title": "Facturación / Contratos",
+      "description": "Soportes, cuentas de cobro y contratos.",
+      "kind": "administrativo",
+      "action": { "type": "link", "href": "#" },
+      "tags": ["finanzas"],
+      "icon": "💼"
+    },
+    {
+      "id": "contactos",
+      "title": "Contactos FESICOL",
+      "description": "Directorio de enlaces y responsables.",
+      "kind": "administrativo",
+      "action": { "type": "link", "href": "#" },
+      "tags": ["directorio"],
+      "icon": "📇"
+    }
+  ],
+  "footer": "Musicala · FESICOL"
+}
