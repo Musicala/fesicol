@@ -4,9 +4,9 @@
   --text: #111827;
   --muted: #6b7280;
   --border: #e5e7eb;
-  --primary: #0C41C4;    /* Azul Musicala sugerido */
+  --primary: #0C41C4;
   --primary-ink: #0a2f8f;
-  --accent: #00B3A6;     /* Toque fresco para estados */
+  --accent: #00B3A6;
   --radius: 16px;
   --shadow: 0 8px 28px rgba(16,24,40,.08);
 }
