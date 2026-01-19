@@ -46,7 +46,6 @@
         <div class="filters">
           <button class="chip active" data-filter="all">Todo</button>
           <button class="chip" data-filter="operativo">Operativo</button>
-          <button class="chip" data-filter="académico">Académico</button>
           <button class="chip" data-filter="administrativo">Administrativo</button>
         </div>
       </div>
@@ -63,17 +62,16 @@
     </section>
   </main>
 
-  <!-- Modal de imagen (cronograma u otras) -->
   <!-- Modal de imagen (solo visualización) -->
-    <dialog id="imgModal">
+  <dialog id="imgModal">
     <div class="modal-head">
-        <h4 id="imgModalTitle">Vista</h4>
-        <button class="icon-btn" id="closeModal" aria-label="Cerrar">✕</button>
+      <h4 id="imgModalTitle">Vista</h4>
+      <button class="icon-btn" id="closeModal" aria-label="Cerrar">✕</button>
     </div>
     <div class="modal-body">
-        <img id="modalImage" alt="Vista de soporte" />
+      <img id="modalImage" alt="Vista de soporte" />
     </div>
-    </dialog>
+  </dialog>
 
   <!-- Modal de tabla (CSV) -->
   <dialog id="tableModal">
@@ -128,44 +126,7 @@
         <div class="form-row">
           <button type="submit" class="btn">Guardar inscripción</button>
         </div>
-        <small class="muted">Se guarda en la hoja <b>Inscripciones 2025</b>.</small>
-      </form>
-    </div>
-  </dialog>
-
-  <!-- Modal: Importar CSV -->
-  <dialog id="importModal">
-    <div class="modal-head">
-      <h4>Importar inscripciones (CSV)</h4>
-      <button class="icon-btn" id="closeImportModal" aria-label="Cerrar">✕</button>
-    </div>
-    <div class="modal-body">
-      <form id="importForm" class="form">
-        <div class="grid-2">
-          <label>Mes para todas las filas
-            <input id="impMes" type="month" required />
-          </label>
-          <label>Archivo CSV
-            <input id="impFile" type="file" accept=".csv,text/csv" required />
-          </label>
-        </div>
-        <details>
-          <summary>Cabeceras esperadas (flexibles)</summary>
-          <p class="muted">
-            Intentamos mapear automáticamente estas columnas (no importa mayúsculas):
-            <code>Nombre Asociado</code>, <code>Nombre Inscrito</code>, <code>Curso/Instrumento</code>
-            (o <code>Instrumento base</code>/<code>Modalidad/Curso</code>), <code>Teléfono</code>.
-          </p>
-        </details>
-        <div class="table-wrap" style="margin-top:8px;">
-          <table class="data-table" id="previewTable">
-            <thead></thead><tbody></tbody>
-          </table>
-        </div>
-        <div class="form-row">
-          <button type="submit" class="btn">Subir todo</button>
-        </div>
-        <small class="muted">Se insertan filas nuevas en <b>Inscripciones 2025</b>.</small>
+        <small class="muted">Se guarda en la hoja <b>Inscripciones 2026</b>.</small>
       </form>
     </div>
   </dialog>
