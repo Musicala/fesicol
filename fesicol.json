@@ -1,0 +1,177 @@
+{
+  "meta": {
+    "title": "Alianza FESICOL · Musicala",
+    "subtitle": "Gestión integral del convenio",
+    "period": "2026",
+    "last_updated": "2026-01-19",
+    "themeColor": "#0C41C4"
+  },
+  "intro": {
+    "title": "Alcance del convenio",
+    "lead": "Tablero central para cronograma, precios 2026, inscripciones y seguimiento operativo de la alianza con FESICOL.",
+    "bullets": [
+      "Cronograma oficial visible.",
+      "Listado de estudiantes desde Google Sheets (CSV).",
+      "Formulario simple para agregar inscripciones."
+    ]
+  },
+  "assets": {
+    "cronograma_image": "cronogramafesicol.jpg"
+  },
+  "api": {
+    "baseUrl": "https://script.google.com/macros/s/AKfycbxFgX3fuRHLHyEMYR4O-2sjm_z-70CPBXDbiIp14SGZHL_dTdUZ8mVhTkvNZaYuQFrE/exec"
+  },
+  "datasets": {
+    "estudiantes_csv": {
+      "title": "Estudiantes FESICOL",
+      "src": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRf0gO4PUvYt0uORO-XwSnyfBRPFkmOCnf_ThQkFSxlSgch_a8dr8I0VjcJpfNSCSliUOMNioojFP15/pub?gid=0&single=true&output=csv"
+    },
+    "cronograma_csv": {
+      "title": "Cronograma academico 2026 (demo)",
+      "src": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRf0gO4PUvYt0uORO-XwSnyfBRPFkmOCnf_ThQkFSxlSgch_a8dr8I0VjcJpfNSCSliUOMNioojFP15/pub?gid=2046995778&single=true&output=csv",
+      "columns": [
+        "CICLO",
+        "Fecha límite de Inscripción FESICOL"
+      ]
+    }
+  },
+  "actions": [
+    {
+      "id": "precios_2026",
+      "priority": 100,
+      "title": "Precios FESICOL 2026",
+      "description": "Tarifas 2026 para beneficiarios y equipo FESICOL. Todos los servicios aplican para música, danza, teatro y artes plásticas (según modalidad y paquete).",
+      "kind": "administrativo",
+      "action": {
+        "type": "static_table",
+        "title": "Precios FESICOL 2026",
+        "note": "📌 Alcance: las tarifas aplican para cursos de Música, Danza, Teatro y Artes Plásticas. El servicio que elijas define la modalidad (Sede, Hogar, Virtual, Online), el tipo (Personalizado/Grupal/Musifamiliar/Ensambles) y la duración (paquetes o programas).",
+        "columns": [
+          "Servicio",
+          "Precio (COP)"
+        ],
+        "rows": [
+          ["Sede Personalizado Paquete de 4 clases", "$ 296.000"],
+          ["Sede Personalizado Paquete de 8 clases", "$ 560.000"],
+          ["Sede Personalizado Paquete de 12 clases", "$ 796.000"],
+          ["Sede Personalizado Paquete de 24 clases", "$ 1.502.000"],
+          ["Musifamiliar Sede Grupal Paquete de 4 clases", "$ 374.000"],
+          ["Musifamiliar Sede Grupal Paquete de 8 clases", "$ 712.000"],
+          ["Musifamiliar Sede Grupal Paquete de 12 clases", "$ 1.010.000"],
+          ["Musifamiliar Sede Grupal Paquete de 24 clases", "$ 1.908.000"],
+          ["Sede Grupal Paquete de 4 clases", "$ 160.000"],
+          ["Sede Grupal Paquete de 8 clases", "$ 304.000"],
+          ["Sede Grupal Paquete de 12 clases", "$ 432.000"],
+          ["Sede Grupal Paquete de 24 clases", "$ 810.000"],
+          ["Ensambles Paquete de 4 clases", "$ 80.000"],
+          ["Ensambles Paquete de 8 clases", "$ 139.000"],
+          ["Ensambles Paquete de 12 clases", "$ 197.000"],
+          ["Ensambles Paquete de 24 clases", "$ 372.000"],
+          ["Musigym 1 mes", "$ 158.000"],
+          ["Musigym 2 meses", "$ 306.000"],
+          ["Musigym 3 meses", "$ 454.000"],
+          ["Musigym 6 meses", "$ 914.000"],
+          ["Hogar Personalizado Paquete de 4 clases", "$ 354.000"],
+          ["Hogar Personalizado Paquete de 8 clases", "$ 672.000"],
+          ["Hogar Personalizado Paquete de 12 clases", "$ 954.000"],
+          ["Hogar Personalizado Paquete de 24 clases", "$ 1.802.000"],
+          ["Hogar Musifamiliar Grupal Paquete de 4 clases", "$ 412.000"],
+          ["Hogar Musifamiliar Grupal Paquete de 8 clases", "$ 784.000"],
+          ["Hogar Musifamiliar Grupal Paquete de 12 clases", "$ 1.114.000"],
+          ["Hogar Musifamiliar Grupal Paquete de 24 clases", "$ 2.102.000"],
+          ["Virtual Personalizado Paquete de 4 clases", "$ 266.000"],
+          ["Virtual Personalizado Paquete de 8 clases", "$ 504.000"],
+          ["Virtual Personalizado Paquete de 12 clases", "$ 716.000"],
+          ["Virtual Personalizado Paquete de 24 clases", "$ 1.352.000"],
+          ["Virtual Grupal Paquete de 4 clases", "$ 324.000"],
+          ["Virtual Grupal Paquete de 8 clases", "$ 616.000"],
+          ["Virtual Grupal Paquete de 12 clases", "$ 876.000"],
+          ["Virtual Grupal Paquete de 24 clases", "$ 1.652.000"],
+          ["Plataforma Online 1 mes", "$ 52.000"],
+          ["Plataforma Online 2 meses", "$ 102.000"],
+          ["Plataforma Online 3 meses", "$ 150.000"],
+          ["Plataforma Online 6 meses", "$ 302.000"],
+          ["Plataforma Online 12 meses", "$ 428.000"],
+          ["Curso Preuniversitario Personalizado 9 semanas - 54 clases", "$ 1.988.000"],
+          ["Curso Preuniversitario Grupal 9 semanas - 54 clases", "$ 1.590.000"],
+          ["Curso de formacion 9 semanas - 27 clases", "$ 636.000"],
+          ["Curso de formacion 9 semanas - 36 clases", "$ 690.000"],
+          ["Curso Vacacional 1 semana - 20 horas", "$ 368.000"],
+          ["Curso Vacacional 1 semana - 16 horas", "$ 296.000"],
+          ["Taller empresarial Clase individual", "$ 106.000"],
+          ["Taller empresarial Paquete de 4 clases", "$ 384.000"],
+          ["Taller empresarial Paquete de 8 clases", "$ 728.000"],
+          ["Taller empresarial Paquete de 12 clases", "$ 1.034.000"],
+          ["Taller empresarial Paquete de 24 clases", "$ 1.952.000"]
+        ]
+      },
+      "tags": ["precios", "2026", "beneficios", "música", "danza", "teatro", "artes"]
+      ,
+      "icon": "💜"
+    },
+    {
+      "id": "ver_cronograma",
+      "title": "Ver cronograma",
+      "description": "Visualiza el cronograma oficial desde Google Sheets.",
+      "kind": "operativo",
+      "action": { "type": "csv_table", "dataset": "cronograma_csv" },
+      "tags": ["agenda", "operativo"],
+      "icon": "🗓️"
+    },
+    {
+      "id": "ver_estudiantes",
+      "title": "Listado de estudiantes",
+      "description": "Consulta y filtra el listado desde Google Sheets (CSV).",
+      "kind": "operativo",
+      "action": { "type": "csv_table", "dataset": "estudiantes_csv" },
+      "tags": ["estudiantes", "csv"],
+      "icon": "👥"
+    },
+    {
+      "id": "add_inscripcion",
+      "title": "Agregar inscripción",
+      "description": "Selecciona mes, busca un estudiante (base oficial) y guarda.",
+      "kind": "operativo",
+      "action": { "type": "add_form" },
+      "tags": ["inscripciones", "form"],
+      "icon": "➕"
+    },
+    {
+      "id": "facturacion",
+      "title": "Facturación / Contratos",
+      "description": "Ejemplo de seguimiento a documentos, cuentas de cobro y soportes (demo).",
+      "kind": "administrativo",
+      "action": {
+        "type": "static_table",
+        "title": "Facturacion / Contratos (demo)",
+        "columns": ["Documento", "Estado", "Ultima actualizacion", "Nota"],
+        "rows": [
+          ["Contrato marco 2026", "Ejemplo", "2026-01-15", "Plantilla demo para mostrar el flujo"],
+          ["Cuenta de cobro - Enero", "Pendiente", "2026-01-19", "Se genera cuando cierre el mes"],
+          ["Soportes de asistencia", "Ejemplo", "2026-01-12", "Adjuntos simulados en esta vista"]
+        ]
+      },
+      "tags": ["finanzas", "demo"],
+      "icon": "💼"
+    },
+    {
+      "id": "contactos",
+      "title": "Contactos FESICOL",
+      "description": "Directorio de responsables y canales (demo).",
+      "kind": "administrativo",
+      "action": {
+        "type": "static_table",
+        "title": "Contactos FESICOL (demo)",
+        "columns": ["Nombre", "Rol", "Canal", "Nota"],
+        "rows": [
+          ["Juan Miguel", "Contacto principal", "correo", "(demo)"],
+          ["Equipo FESICOL", "Administrativos", "grupo", "(demo)"],
+          ["Musicala", "Coordinacion alianza", "correo / whatsapp", "(demo)"]
+        ]
+      },
+      "tags": ["demo", "directorio"],
+      "icon": "📇"
+    }
+  ],
+  "footer": "Musicala · FESICOL"
+}
