@@ -1,140 +1,563 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es-CO">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Mobile / PWA -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="FESICOL" />
+
+  <!-- App identity -->
   <title>Alianza FESICOL · Musicala</title>
-
-  <!-- Fuentes y estilos -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css" />
-
-  <!-- Tema (lo actualiza app.js con el JSON) -->
+  <meta
+    name="description"
+    content="Panel de gestión del convenio FESICOL · Musicala. Acceso restringido."
+  />
   <meta name="theme-color" content="#0C41C4" />
   <meta name="color-scheme" content="light only" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+
+  <!-- SEO / Social -->
+  <meta property="og:title" content="Alianza FESICOL · Musicala" />
+  <meta
+    property="og:description"
+    content="Panel de gestión del convenio FESICOL · Musicala. Acceso restringido."
+  />
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="es_CO" />
+
+  <!-- Performance -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preload" as="image" href="logo.png" />
+  <link rel="modulepreload" href="app.js" />
+  <link rel="modulepreload" href="firebase.js" />
+
+  <!-- Font -->
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+    rel="stylesheet"
+  />
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="styles.css" />
 </head>
+
 <body>
-  <header class="site-header">
-    <div class="brand">
-      <img src="logo.png" alt="Logo Musicala" class="logo" />
-      <div class="brand-text">
-        <h1 id="title">Alianza FESICOL</h1>
-        <p id="subtitle" class="muted">Gestión integral del convenio</p>
+  <a class="skip-link" href="#mainContent">Saltar al contenido</a>
+
+  <noscript>
+    <div
+      style="
+        max-width: 920px;
+        margin: 16px auto;
+        padding: 14px 16px;
+        border-radius: 14px;
+        border: 1px solid rgba(17,24,39,.12);
+        background: #fff;
+        box-shadow: 0 10px 30px rgba(16,24,40,.08);
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        color: #111827;
+      "
+    >
+      <b>Este panel necesita JavaScript</b> para funcionar.
+      <div style="margin-top:6px;color:#6b7280">
+        Actívalo y recarga la página.
       </div>
     </div>
+  </noscript>
 
-    <div class="quick-meta">
-      <span class="badge" id="periodoBadge">Periodo</span>
-      <span class="dot"></span>
-      <span class="muted" id="lastUpdated">Actualizado: —</span>
+  <!-- =========================
+       LOADER GLOBAL
+  ========================== -->
+  <div
+    id="globalLoader"
+    class="global-loader"
+    hidden
+    aria-live="polite"
+    aria-busy="true"
+    aria-label="Cargando contenido"
+  >
+    <div class="spinner" aria-hidden="true"></div>
+    <div class="loader-text">Cargando…</div>
+  </div>
+
+  <!-- =========================
+       TOASTS
+  ========================== -->
+  <div
+    id="toastHost"
+    class="toast-host"
+    aria-live="polite"
+    aria-relevant="additions text"
+    aria-atomic="false"
+  ></div>
+
+  <!-- =========================
+       AUTH VIEW
+  ========================== -->
+  <section id="authView" class="auth-view" hidden aria-labelledby="authHeading">
+    <div class="auth-shell">
+      <header class="auth-brand">
+        <img src="logo.png" alt="Logo Musicala" class="logo" />
+        <div class="brand-text">
+          <h1 id="authHeading" class="auth-title">Alianza FESICOL</h1>
+          <p class="muted">Acceso restringido</p>
+        </div>
+      </header>
+
+      <div class="auth-card" role="region" aria-label="Ingreso al panel">
+        <h2 class="auth-h">Ingresar</h2>
+        <p class="muted auth-sub">
+          Este panel contiene información sensible de clientes. Entra con tu usuario autorizado.
+        </p>
+
+        <form id="loginForm" class="form" autocomplete="on" novalidate>
+          <label class="field" for="loginEmail">
+            <span>Correo</span>
+            <input
+              id="loginEmail"
+              name="email"
+              type="email"
+              inputmode="email"
+              autocomplete="email"
+              placeholder="correo@musicala.co"
+              required
+              aria-describedby="authMsg"
+            />
+          </label>
+
+          <label class="field" for="loginPass">
+            <span>Contraseña</span>
+            <input
+              id="loginPass"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              placeholder="••••••••"
+              required
+              aria-describedby="authMsg"
+            />
+          </label>
+
+          <div class="auth-actions" style="display:flex; flex-direction:column; gap:12px;">
+            <button id="btnLogin" class="btn primary" type="submit">
+              Entrar
+            </button>
+
+            <div
+              class="auth-separator"
+              aria-hidden="true"
+              style="
+                display:flex;
+                align-items:center;
+                gap:10px;
+                margin: 2px 0;
+                color:#6b7280;
+                font-size:13px;
+                font-weight:700;
+              "
+            >
+              <span style="height:1px; flex:1; background:rgba(17,24,39,.10)"></span>
+              o
+              <span style="height:1px; flex:1; background:rgba(17,24,39,.10)"></span>
+            </div>
+
+            <button
+              id="btnGoogle"
+              class="btn google"
+              type="button"
+              aria-label="Continuar con Google"
+            >
+              <span class="gdot" aria-hidden="true">G</span>
+              <span>Continuar con Google</span>
+            </button>
+          </div>
+
+          <div
+            id="authMsg"
+            class="auth-msg"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          ></div>
+
+          <p class="muted auth-foot">
+            Si no tienes acceso, no lo inventes. Pídeselo a admin.
+          </p>
+        </form>
+      </div>
     </div>
-  </header>
+  </section>
 
-  <main class="container">
-    <!-- Info principal -->
-    <section class="hero-card" id="introCard" hidden>
-      <h2 id="introTitle">Alianza y alcance</h2>
-      <p id="introLead" class="lead"></p>
-      <ul id="introBullets" class="bullets"></ul>
-    </section>
-
-    <!-- Acciones principales -->
-    <section>
-      <div class="section-head">
-        <h3>Panel de acciones</h3>
-        <div class="filters">
-          <button class="chip active" data-filter="all">Todo</button>
-          <button class="chip" data-filter="operativo">Operativo</button>
-          <button class="chip" data-filter="administrativo">Administrativo</button>
+  <!-- =========================
+       APP VIEW
+  ========================== -->
+  <div id="appView" hidden>
+    <header class="site-header" role="banner">
+      <div class="brand">
+        <img src="logo.png" alt="Logo Musicala" class="logo" />
+        <div class="brand-text">
+          <h1 id="title">Alianza FESICOL</h1>
+          <p id="subtitle" class="muted">Gestión integral del convenio</p>
         </div>
       </div>
 
-      <div id="actionsGrid" class="grid"></div>
-    </section>
+      <div class="quick-meta" aria-label="Información rápida">
+        <span class="badge" id="periodoBadge">Periodo</span>
+        <span class="dot" aria-hidden="true"></span>
+        <span class="muted" id="lastUpdated">Actualizado: —</span>
 
-    <!-- KPIs / estado -->
-    <section id="kpisSection" hidden>
-      <div class="section-head">
-        <h3>Estado y seguimiento</h3>
+        <span class="dot" aria-hidden="true"></span>
+        <span class="muted" id="sessionEmail" title="Usuario activo">—</span>
+
+        <button
+          class="btn secondary"
+          id="btnLogout"
+          type="button"
+          title="Cerrar sesión"
+          aria-label="Cerrar sesión"
+        >
+          Salir
+        </button>
       </div>
-      <div class="kpis" id="kpisGrid"></div>
-    </section>
-  </main>
+    </header>
 
-  <!-- Modal de imagen (solo visualización) -->
-  <dialog id="imgModal">
-    <div class="modal-head">
-      <h4 id="imgModalTitle">Vista</h4>
-      <button class="icon-btn" id="closeModal" aria-label="Cerrar">✕</button>
-    </div>
-    <div class="modal-body">
-      <img id="modalImage" alt="Vista de soporte" />
-    </div>
-  </dialog>
+    <main id="mainContent" class="container" role="main">
+      <!-- Intro -->
+      <section id="introCard" class="hero-card" hidden aria-labelledby="introTitle">
+        <div class="section-head">
+          <h2 id="introTitle">Alianza y alcance</h2>
+        </div>
+        <p id="introLead" class="lead"></p>
+        <ul id="introBullets" class="bullets"></ul>
+      </section>
 
-  <!-- Modal de tabla (CSV) -->
-  <dialog id="tableModal">
-    <div class="modal-head">
-      <h4 id="tableModalTitle">Datos</h4>
-      <button class="icon-btn" id="closeTableModal" aria-label="Cerrar">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="table-tools">
-        <input id="tableSearch" type="search" placeholder="Buscar..." aria-label="Buscar en la tabla" />
-        <a id="downloadCSV" class="btn secondary" target="_blank" rel="noopener">Descargar CSV</a>
+      <!-- Acciones -->
+      <section aria-labelledby="accionesTitle">
+        <div class="section-head">
+          <h3 id="accionesTitle">Panel de acciones</h3>
+
+          <div class="filters" role="tablist" aria-label="Filtros de acciones">
+            <button
+              class="chip active"
+              data-filter="all"
+              type="button"
+              role="tab"
+              aria-selected="true"
+            >
+              Todo
+            </button>
+            <button
+              class="chip"
+              data-filter="operativo"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              Operativo
+            </button>
+            <button
+              class="chip"
+              data-filter="administrativo"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              Administrativo
+            </button>
+          </div>
+        </div>
+
+        <div id="actionsGrid" class="grid" aria-live="polite"></div>
+      </section>
+
+      <!-- KPIs -->
+      <section id="kpisSection" hidden aria-labelledby="kpisTitle">
+        <div class="section-head">
+          <h3 id="kpisTitle">Estado y seguimiento</h3>
+        </div>
+        <div id="kpisGrid" class="kpis"></div>
+      </section>
+    </main>
+
+    <!-- =========================
+         MODAL IMAGEN
+    ========================== -->
+    <dialog id="imgModal" aria-labelledby="imgModalTitle">
+      <div class="modal-head">
+        <h4 id="imgModalTitle">Vista</h4>
+        <button class="icon-btn" id="closeModal" type="button" aria-label="Cerrar">✕</button>
       </div>
-      <div class="table-wrap">
-        <table id="dataTable" class="data-table">
-          <thead></thead>
-          <tbody></tbody>
-        </table>
-        <div id="tableEmpty" class="muted" style="display:none;">Sin resultados.</div>
+
+      <div class="modal-body">
+        <img id="modalImage" alt="Vista de soporte" />
       </div>
-    </div>
-  </dialog>
+    </dialog>
 
-  <!-- Modal: Agregar inscripción -->
-  <dialog id="addModal">
-    <div class="modal-head">
-      <h4>Agregar inscripción</h4>
-      <button class="icon-btn" id="closeAddModal" aria-label="Cerrar">✕</button>
-    </div>
-    <div class="modal-body">
-      <form id="addForm" class="form">
-        <div class="grid-2">
-          <label>Mes
-            <input id="addMes" type="month" required />
-          </label>
-          <label>Estudiante (base oficial)
-            <input id="addNombreInscrito" list="listaEstudiantes" placeholder="Empieza a escribir..." required />
-            <datalist id="listaEstudiantes"></datalist>
-          </label>
+    <!-- =========================
+         MODAL TABLA
+    ========================== -->
+    <dialog id="tableModal" aria-labelledby="tableModalTitle">
+      <div class="modal-head">
+        <h4 id="tableModalTitle">Datos</h4>
+        <button class="icon-btn" id="closeTableModal" type="button" aria-label="Cerrar">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="table-tools">
+          <input
+            id="tableSearch"
+            type="search"
+            placeholder="Buscar..."
+            aria-label="Buscar en la tabla"
+            autocomplete="off"
+          />
+
+          <a
+            id="downloadCSV"
+            class="btn secondary"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Descargar CSV
+          </a>
         </div>
-        <div class="grid-2">
-          <label>Nombre Asociado
-            <input id="addNombreAsociado" placeholder="Se autocompleta" required />
-          </label>
-          <label>Curso/Instrumento
-            <input id="addCurso" placeholder="Se autocompleta" required />
-          </label>
+
+        <div
+          id="staticNote"
+          class="muted"
+          style="display:none; padding:0 2px 12px;"
+          aria-live="polite"
+        ></div>
+
+        <div class="table-wrap">
+          <table id="dataTable" class="data-table" aria-label="Tabla de datos">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+
+          <div id="tableEmpty" class="muted" style="display:none; padding:10px 12px;">
+            Sin resultados.
+          </div>
         </div>
-        <label>Teléfono
-          <input id="addTelefono" inputmode="tel" placeholder="Se autocompleta" required />
-        </label>
+      </div>
+    </dialog>
 
-        <div class="form-row">
-          <button type="submit" class="btn">Guardar inscripción</button>
+    <!-- =========================
+         MODAL AGREGAR INSCRIPCIÓN
+    ========================== -->
+    <dialog id="addModal" aria-labelledby="addModalTitle">
+      <div class="modal-head">
+        <h4 id="addModalTitle">Agregar inscripción</h4>
+        <button class="icon-btn" id="closeAddModal" type="button" aria-label="Cerrar">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <form id="addForm" class="form" autocomplete="off">
+          <div class="grid-2">
+            <label class="field" for="addMes">
+              <span>Mes</span>
+              <input id="addMes" type="month" required />
+            </label>
+
+            <label class="field" for="addNombreInscrito">
+              <span>Estudiante (base oficial)</span>
+              <input
+                id="addNombreInscrito"
+                list="listaEstudiantes"
+                placeholder="Empieza a escribir..."
+                required
+              />
+              <datalist id="listaEstudiantes"></datalist>
+            </label>
+          </div>
+
+          <div class="grid-2">
+            <label class="field" for="addNombreAsociado">
+              <span>Nombre asociado</span>
+              <input id="addNombreAsociado" placeholder="Se autocompleta" required />
+            </label>
+
+            <label class="field" for="addCurso">
+              <span>Curso/Instrumento</span>
+              <input id="addCurso" placeholder="Se autocompleta" required />
+            </label>
+          </div>
+
+          <label class="field" for="addTelefono">
+            <span>Teléfono</span>
+            <input
+              id="addTelefono"
+              inputmode="tel"
+              placeholder="Se autocompleta"
+              required
+            />
+          </label>
+
+          <div class="form-row">
+            <button type="submit" class="btn primary">Guardar inscripción</button>
+          </div>
+
+          <small class="muted">
+            Se guarda en la hoja <b>Inscripciones 2026</b>.
+          </small>
+        </form>
+      </div>
+    </dialog>
+
+    <!-- =========================
+         MODAL FACTURACIÓN / CONTRATOS
+         Preparado para conectar con Sheets
+    ========================== -->
+    <dialog id="billingModal" aria-labelledby="billingModalTitle">
+      <div class="modal-head">
+        <h4 id="billingModalTitle">Facturación / Contratos</h4>
+        <button
+          class="icon-btn"
+          id="closeBillingModal"
+          type="button"
+          aria-label="Cerrar"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <form id="billingForm" class="form" autocomplete="off">
+          <div class="grid-2">
+            <label class="field" for="billingPeriodo">
+              <span>Periodo</span>
+              <input id="billingPeriodo" type="month" required />
+            </label>
+
+            <label class="field" for="billingTipo">
+              <span>Tipo de documento</span>
+              <select id="billingTipo" required>
+                <option value="">Selecciona...</option>
+                <option value="Contrato">Contrato</option>
+                <option value="Cuenta de cobro">Cuenta de cobro</option>
+                <option value="Factura">Factura</option>
+                <option value="Soporte de asistencia">Soporte de asistencia</option>
+                <option value="Otro">Otro</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid-2">
+            <label class="field" for="billingNombre">
+              <span>Nombre del documento</span>
+              <input
+                id="billingNombre"
+                type="text"
+                placeholder="Ej: Contrato marzo 2026"
+                required
+              />
+            </label>
+
+            <label class="field" for="billingEstado">
+              <span>Estado</span>
+              <select id="billingEstado" required>
+                <option value="">Selecciona...</option>
+                <option value="Pendiente">Pendiente</option>
+                <option value="En revisión">En revisión</option>
+                <option value="Aprobado">Aprobado</option>
+                <option value="Firmado">Firmado</option>
+                <option value="Radicado">Radicado</option>
+                <option value="Pagado">Pagado</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid-2">
+            <label class="field" for="billingResponsable">
+              <span>Responsable</span>
+              <input
+                id="billingResponsable"
+                type="text"
+                placeholder="Ej: Musicala / FESICOL / administrativo"
+              />
+            </label>
+
+            <label class="field" for="billingArchivoUrl">
+              <span>URL del archivo</span>
+              <input
+                id="billingArchivoUrl"
+                type="url"
+                placeholder="https://..."
+              />
+            </label>
+          </div>
+
+          <label class="field" for="billingNota">
+            <span>Nota / seguimiento</span>
+            <textarea
+              id="billingNota"
+              rows="4"
+              placeholder="Agrega una observación, comentario o seguimiento"
+            ></textarea>
+          </label>
+
+          <div class="form-row" style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button id="billingSubmitBtn" type="submit" class="btn primary">
+              Guardar documento
+            </button>
+            <button id="billingRefreshBtn" type="button" class="btn secondary">
+              Actualizar lista
+            </button>
+          </div>
+
+          <small class="muted">
+            Esta sección queda lista para guardar y consultar datos desde Google Sheets.
+          </small>
+        </form>
+
+        <hr
+          style="
+            margin: 18px 0;
+            border: none;
+            border-top: 1px solid rgba(17,24,39,.08);
+          "
+        />
+
+        <div class="section-head" style="margin-top:0;">
+          <h4 style="margin:0;">Documentos registrados</h4>
         </div>
-        <small class="muted">Se guarda en la hoja <b>Inscripciones 2026</b>.</small>
-      </form>
-    </div>
-  </dialog>
 
-  <footer class="site-footer">
-    <small id="footerNote">Musicala · FESICOL</small>
-  </footer>
+        <div class="table-wrap">
+          <table id="billingTable" class="data-table" aria-label="Documentos registrados">
+            <thead>
+              <tr>
+                <th>Documento</th>
+                <th>Tipo</th>
+                <th>Periodo</th>
+                <th>Estado</th>
+                <th>Última actualización</th>
+                <th>Nota</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
 
-  <script src="app.js" defer></script>
+          <div
+            id="billingEmpty"
+            class="muted"
+            style="padding:10px 12px; display:none;"
+          >
+            Aún no hay documentos registrados.
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <footer class="site-footer" role="contentinfo">
+      <small id="footerNote">Musicala · FESICOL</small>
+    </footer>
+  </div>
+
+  <script type="module" src="app.js"></script>
 </body>
 </html>
