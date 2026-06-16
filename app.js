@@ -1,23 +1,13 @@
-/* =========================
-   Alianza FESICOL · Musicala
-   app.js (completo + mejorado)
-   - Firebase Auth: email/pass + Google (popup / redirect)
-   - Mejor manejo de errores y loading
-   - Render seguro del tablero
-   - Modales más sólidos
-   - Tabla CSV / tabla estática
-   - Formulario de inscripción conectado al API
-   - Facturación / contratos conectados al API
-   - Soporte para descarga de archivos locales (xlsx, pdf, docx, etc.)
-   ========================= */
+/* =========================================================
+   Panel FESICOL · Musicala — app.js (Firestore)
+   Fase 1: fundación (ciclos, estudiantes, inscripciones,
+   facturación, tarifas, resumen con KPIs reales).
+========================================================= */
 
 import { initFirebase } from "./firebase.js";
+import * as DB from "./db.js";
+import { formatCOP, parsePrice } from "./db.js";
 
-const BUILD = "2026-04-01.3";
-const DATA_URL = "fesicol.json";
-const API_TIMEOUT_MS = 20000;
-
-/* -------- Firebase config -------- */
 const firebaseConfig = {
   apiKey: "AIzaSyBoZuK8koOeOhl2nBrqyUoEznpkqnnrTbs",
   authDomain: "manager-fesicol.firebaseapp.com",
@@ -27,1354 +17,979 @@ const firebaseConfig = {
   appId: "1:501861978891:web:83eda7b8358121f23f880e"
 };
 
-const {
-  auth,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut,
-  signInWithGoogle,
-  consumeRedirectResult,
-  prettyAuthError
-} = initFirebase(firebaseConfig, {
-  persistence: "local",
-  debug: true
-});
+const fb = initFirebase(firebaseConfig, { persistence: "local", debug: true });
+const { auth, db, storage, onAuthStateChanged, signInWithEmailAndPassword, signOut, signInWithGoogle, consumeRedirectResult, prettyAuthError } = fb;
+DB.initDb(db, storage);
 
-/* -------- Fallback por si falla el JSON -------- */
-window.__fallbackData = {
-  meta: {
-    title: "Alianza FESICOL · Musicala",
-    subtitle: "Gestión integral del convenio",
-    period: "2026",
-    last_updated: "2026-01-19",
-    themeColor: "#0C41C4"
-  },
-  intro: {
-    title: "Alcance del convenio",
-    lead: "Tablero único para cronogramas, actas, reportes, PQRS y materiales académicos de FESICOL.",
-    bullets: [
-      "Control de cronograma oficial.",
-      "Acceso rápido a documentos clave.",
-      "Seguimiento a indicadores."
-    ]
-  },
-  assets: { cronograma_image: "cronogramafesicol.jpg" },
-  api: {
-    baseUrl: "",
-    endpoints: {
-      stats: "stats",
-      students: "students",
-      add_one: "addOne",
-      add_enrollment: "addOne",
-      list_billing: "getBilling",
-      add_billing: "addBilling"
-    }
-  },
-  datasets: {},
-  actions: [],
-  footer: "Musicala · FESICOL"
-};
+/* -------- Roles -------- */
+const ADMIN_EMAILS = [
+  "alekcaballeromusic@gmail.com",
+  "catalina.medina.leal@gmail.com",
+  "imusicala@gmail.com",
+  "musicalaasesor@gmail.com"
+];
+const isAdminEmail = (email) => ADMIN_EMAILS.includes(String(email || "").trim().toLowerCase());
+const isAdmin = () => state.role === "admin";
 
-/* -------- Atajos DOM -------- */
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+/* -------- DOM helpers -------- */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-/* -------- Estado global -------- */
-const state = {
-  data: null,
-  apiBase: null,
-  appBooted: false,
-  studentsCache: [],
-  addModalWired: false,
-  billingModalWired: false,
-  busy: false
-};
-
-/* -------- Elementos UI base -------- */
+/* -------- UI base -------- */
 const loaderEl = $("#globalLoader");
 const toastHost = $("#toastHost");
-
 const authView = $("#authView");
 const appView = $("#appView");
+const content = $("#dashContent");
+const modal = $("#modal");
+const modalBody = $("#modalBody");
 
-const loginForm = $("#loginForm");
-const loginEmail = $("#loginEmail");
-const loginPass = $("#loginPass");
-const authMsg = $("#authMsg");
-const btnLogin = $("#btnLogin");
-const btnGoogle = $("#btnGoogle");
+const state = {
+  view: "resumen",
+  booted: false,
+  role: "lector",
+  user: null,
+  ciclos: [],
+  estudiantes: [],
+  inscripciones: [],
+  facturas: [],
+  tarifas: [],
+  usuarios: []
+};
 
-const btnLogout = $("#btnLogout");
-const sessionEmail = $("#sessionEmail");
+/** Devuelve "" si el usuario no puede escribir (oculta botones de acción). */
+function adminOnly(html) { return isAdmin() ? html : ""; }
 
-/* -------- Modales -------- */
-const imgModal = $("#imgModal");
-const tableModal = $("#tableModal");
-const addModal = $("#addModal");
-const billingModal = $("#billingModal");
-
-/* -------- Formularios -------- */
-const addForm = $("#addForm");
-const billingForm = $("#billingForm");
-
-/* -------- Billing UI -------- */
-const billingTableBody = $("#billingTable tbody");
-const billingEmpty = $("#billingEmpty");
-const billingSubmitBtn = $("#billingSubmitBtn");
-const billingRefreshBtn = $("#billingRefreshBtn");
-
-/* -------- Helpers generales -------- */
-function setText(sel, value, fallback = "") {
-  const el = typeof sel === "string" ? $(sel) : sel;
-  if (el) el.textContent = value ?? fallback;
-}
-
-function setHTML(sel, value, fallback = "") {
-  const el = typeof sel === "string" ? $(sel) : sel;
-  if (el) el.innerHTML = value ?? fallback;
-}
-
-function isStandaloneMode() {
-  return (
-    window.matchMedia?.("(display-mode: standalone)")?.matches ||
-    window.navigator.standalone === true
-  );
-}
-
-function isMobileLike() {
-  return /Android|webOS|iPhone|iPad|iPod|Opera Mini|IEMobile/i.test(navigator.userAgent);
-}
-
-function setAuthControlsDisabled(disabled) {
-  [loginEmail, loginPass, btnLogin, btnGoogle].forEach((el) => {
-    if (!el) return;
-    el.disabled = !!disabled;
-    el.setAttribute("aria-disabled", String(!!disabled));
-  });
-}
-
-function setAppControlsDisabled(disabled) {
-  if (btnLogout) {
-    btnLogout.disabled = !!disabled;
-    btnLogout.setAttribute("aria-disabled", String(!!disabled));
-  }
-}
-
+/* -------- Utils UI -------- */
 function setLoading(on, msg = "Cargando…") {
-  state.busy = !!on;
-
-  if (loaderEl) {
-    loaderEl.hidden = !on;
-    const text = loaderEl.querySelector(".loader-text");
-    if (text) text.textContent = msg;
-    loaderEl.setAttribute("aria-busy", String(!!on));
-  }
-
-  setAuthControlsDisabled(on);
-  setAppControlsDisabled(on);
+  if (!loaderEl) return;
+  loaderEl.hidden = !on;
+  const t = loaderEl.querySelector(".loader-text");
+  if (t) t.textContent = msg;
 }
-
 function toast(message, type = "info", ttl = 3200) {
   if (!toastHost || !message) return;
+  const el = document.createElement("div");
+  el.className = `toast ${type}`;
+  el.textContent = String(message);
+  toastHost.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("show"));
+  setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 250); }, ttl);
+}
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+function monthISO() { return new Date().toISOString().slice(0, 7); }
 
-  const t = document.createElement("div");
-  t.className = `toast ${type}`;
-  t.setAttribute("role", "status");
-  t.textContent = String(message);
+function openModal(title, html) {
+  $("#modalTitle").textContent = title;
+  modalBody.innerHTML = html;
+  if (typeof modal.showModal === "function" && !modal.open) modal.showModal();
+}
+function closeModal() { if (modal.open) modal.close(); }
+$("#closeModal")?.addEventListener("click", closeModal);
+modal?.addEventListener("click", (e) => {
+  const r = modal.getBoundingClientRect();
+  const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+  if (!inside) closeModal();
+});
 
-  toastHost.appendChild(t);
-  requestAnimationFrame(() => t.classList.add("show"));
-
-  window.setTimeout(() => {
-    t.classList.remove("show");
-    window.setTimeout(() => t.remove(), 250);
-  }, ttl);
+/* =========================================================
+   Fase 3 · Helpers (gráficas SVG, fechas, exportar Excel)
+========================================================= */
+const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+function mesLabel(ym) {
+  const [y, m] = String(ym || "").split("-");
+  return m ? `${MESES[Number(m) - 1] || m} ${String(y).slice(2)}` : "—";
+}
+function diasHasta(fechaISO) {
+  if (!fechaISO) return null;
+  return Math.ceil((new Date(fechaISO) - new Date(todayISO())) / 86400000);
 }
 
-function setThemeColor(color) {
-  if (!color) return;
-  document.documentElement.style.setProperty("--primary", color);
-  const metaTheme = document.querySelector('meta[name="theme-color"]');
-  if (metaTheme) metaTheme.setAttribute("content", color);
+/** Gráfica de barras vertical en SVG. data = [{label, value}] */
+function barChart(data, { height = 200, color = "var(--primary)", money = true } = {}) {
+  if (!data.length) return `<p class="muted">Sin datos para graficar.</p>`;
+  const max = Math.max(...data.map((d) => d.value), 1);
+  const bw = 100 / data.length;
+  const bars = data.map((d, i) => {
+    const h = (d.value / max) * 78;
+    const x = i * bw;
+    return `
+      <g>
+        <rect x="${(x + bw * 0.15).toFixed(2)}" y="${(82 - h).toFixed(2)}" width="${(bw * 0.7).toFixed(2)}" height="${h.toFixed(2)}"
+              rx="1.4" fill="${color}"><title>${esc(d.label)}: ${money ? formatCOP(d.value) : d.value}</title></rect>
+        <text x="${(x + bw / 2).toFixed(2)}" y="96" font-size="3.4" text-anchor="middle" fill="var(--muted)">${esc(d.label)}</text>
+        ${d.value ? `<text x="${(x + bw / 2).toFixed(2)}" y="${(80 - h).toFixed(2)}" font-size="3" text-anchor="middle" fill="var(--text-soft)">${money ? "$" + (d.value / 1000).toFixed(0) + "k" : d.value}</text>` : ""}
+      </g>`;
+  }).join("");
+  return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:${height}px" role="img">${bars}</svg>`;
 }
 
-function clearAuthMessage() {
-  if (authMsg) authMsg.textContent = "";
-}
-
-function setAuthMessage(message = "") {
-  if (authMsg) authMsg.textContent = message;
-}
-
-function normalizeMonthValue(date = new Date()) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
-}
-
-function safeTrim(value) {
-  return String(value ?? "").trim();
-}
-
-function normalizeText(value) {
-  return safeTrim(value).toLowerCase();
-}
-
-function getApiEndpoint(name, fallback = "") {
-  return safeTrim(state.data?.api?.endpoints?.[name]) || fallback;
-}
-
-function getEnrollmentEndpoint() {
-  return (
-    getApiEndpoint("add_enrollment") ||
-    getApiEndpoint("add_one") ||
-    "addOne"
-  );
-}
-
-function getBillingConfig() {
-  const actions = Array.isArray(state.data?.actions) ? state.data.actions : [];
-  const item = actions.find((a) => a?.id === "facturacion");
-  return item?.action || null;
-}
-
-function isExternalUrl(url = "") {
-  return /^https?:\/\//i.test(safeTrim(url));
-}
-
-function isBlobLikeUrl(url = "") {
-  return /^(blob:|data:)/i.test(safeTrim(url));
-}
-
-function resolveActionUrl(url = "") {
-  const raw = safeTrim(url);
-  if (!raw) return "";
-
-  if (isExternalUrl(raw) || isBlobLikeUrl(raw)) return raw;
-
+/** Exporta filas (array de objetos) a un .xlsx descargable. */
+async function exportToExcel(rows, filename, sheetName = "Datos") {
+  if (!rows.length) { toast("No hay datos para exportar.", "info"); return; }
+  setLoading(true, "Generando Excel…");
   try {
-    return new URL(raw, window.location.href).href;
-  } catch {
-    return raw;
-  }
+    const XLSX = await loadXLSX();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    XLSX.writeFile(wb, filename);
+    toast("Excel generado ✅", "success");
+  } catch (e) {
+    console.error(e); toast("Error generando Excel: " + (e?.message || e), "error", 5000);
+  } finally { setLoading(false); }
 }
 
-function fileExtensionFromUrl(url = "") {
-  const cleanUrl = safeTrim(url).split("?")[0].split("#")[0];
-  const parts = cleanUrl.split(".");
-  return parts.length > 1 ? parts.pop().toLowerCase() : "";
-}
-
-function guessFilename(url = "", fallback = "archivo") {
-  const cleanUrl = safeTrim(url).split("?")[0].split("#")[0];
-  const parts = cleanUrl.split("/");
-  const last = safeTrim(parts.pop());
-  return last || fallback;
-}
-
-function shouldUseDownloadAttribute(url = "", explicitDownload = false) {
-  if (explicitDownload) return true;
-  if (isExternalUrl(url)) return false;
-
-  const ext = fileExtensionFromUrl(url);
-  return ["xlsx", "xls", "csv", "pdf", "doc", "docx", "zip"].includes(ext);
-}
-
-function triggerFileOpen(url, options = {}) {
-  const href = resolveActionUrl(url);
-  if (!href) {
-    toast("No se encontró el archivo para abrir.", "error", 4200);
-    return;
-  }
-
-  const filename = safeTrim(options.filename) || guessFilename(href, "archivo");
-  const useDownload = shouldUseDownloadAttribute(href, !!options.download);
-
-  const a = document.createElement("a");
-  a.href = href;
-  a.rel = "noopener noreferrer";
-
-  if (useDownload) {
-    a.download = filename;
-  } else {
-    a.target = "_blank";
-  }
-
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
-
-function getActionButtonLabel(action = {}) {
-  const type = safeTrim(action?.type).toLowerCase();
-
-  if (type === "download_file") return "Descargar";
-  if (type === "link" && action?.download) return "Descargar";
-
-  return "Abrir";
-}
-
-/* -------- Auth UI -------- */
-function showAuth(msg = "") {
-  if (authView) authView.hidden = false;
-  if (appView) appView.hidden = true;
-
-  setAuthMessage(msg);
-  setLoading(false);
-
-  if (loginPass) loginPass.value = "";
-}
-
-function showApp(user) {
-  if (authView) authView.hidden = true;
-  if (appView) appView.hidden = false;
-
-  setText(sessionEmail, user?.email || "—");
-  clearAuthMessage();
-  setLoading(false);
-}
-
-function resetProtectedUI() {
-  const actionsGrid = $("#actionsGrid");
-  const kpisGrid = $("#kpisGrid");
-  const kpisSection = $("#kpisSection");
-
-  if (actionsGrid) actionsGrid.innerHTML = "";
-  if (kpisGrid) kpisGrid.innerHTML = "";
-  if (kpisSection) kpisSection.hidden = true;
-
-  closeDialog(imgModal);
-  closeDialog(tableModal);
-  closeDialog(addModal);
-  closeDialog(billingModal);
-
-  state.data = null;
-  state.apiBase = null;
-  state.studentsCache = [];
-  state.appBooted = false;
-}
-
-/* -------- API helpers -------- */
-function requireApi() {
-  if (!state.apiBase) {
-    toast("Falta configurar la URL del WebApp en el JSON.", "error", 4200);
-    return false;
-  }
-  return true;
-}
-
-async function fetchWithTimeout(url, options = {}, timeout = API_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const id = window.setTimeout(() => controller.abort(), timeout);
-
+/* =========================================================
+   SEED inicial (tarifas + ciclos) la primera vez
+========================================================= */
+async function ensureSeed() {
   try {
-    const res = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
-    return res;
-  } finally {
-    window.clearTimeout(id);
+    if ((await DB.tarifasCount()) === 0) {
+      const res = await fetch("fesicol.json", { cache: "no-store" });
+      const data = await res.json();
+      const precios = data?.actions?.find((a) => a.id === "precios_2026");
+      const rows = precios?.action?.rows || [];
+      if (rows.length) {
+        await DB.seedTarifas(rows);
+        toast(`Tarifas 2026 cargadas (${rows.length}) ✅`, "success");
+      }
+    }
+    if ((await DB.ciclosCount()) === 0) {
+      await DB.seedCiclos(defaultCiclos());
+      toast("Ciclos iniciales creados ✅", "success");
+    }
+  } catch (e) {
+    console.warn("Seed:", e);
   }
 }
 
-async function parseJsonSafe(res) {
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error("La API no devolvió JSON válido.");
-  }
+function defaultCiclos() {
+  // Estructura base editable desde la sección Ciclos.
+  return [
+    { nombre: "Ciclo 1", fechaLimiteInscripcion: "2026-02-15", fechaInicioClases: "2026-02-20", estado: "abierto" },
+    { nombre: "Ciclo 2", fechaLimiteInscripcion: "2026-04-15", fechaInicioClases: "2026-04-20", estado: "planeado" },
+    { nombre: "Ciclo 3", fechaLimiteInscripcion: "2026-06-15", fechaInicioClases: "2026-06-20", estado: "planeado" },
+    { nombre: "Ciclo 4", fechaLimiteInscripcion: "2026-08-15", fechaInicioClases: "2026-08-20", estado: "planeado" },
+    { nombre: "Ciclo 5", fechaLimiteInscripcion: "2026-10-15", fechaInicioClases: "2026-10-20", estado: "planeado" }
+  ];
 }
 
-async function apiGet(params = {}) {
-  const qs = new URLSearchParams(params).toString();
-  const url = `${state.apiBase}?${qs}`;
-  const res = await fetchWithTimeout(url, {
-    method: "GET",
-    cache: "no-store"
-  });
-
-  if (!res.ok) {
-    throw new Error(`API GET error (${res.status})`);
-  }
-
-  return parseJsonSafe(res);
+/* =========================================================
+   Carga de datos
+========================================================= */
+async function loadAll() {
+  const [ciclos, estudiantes, inscripciones, facturas, tarifas] = await Promise.all([
+    DB.getCiclos(), DB.getEstudiantes(), DB.getInscripciones(), DB.getFacturas(), DB.getTarifas()
+  ]);
+  Object.assign(state, { ciclos, estudiantes, inscripciones, facturas, tarifas });
 }
 
-async function apiPost(params = {}) {
-  const body = new URLSearchParams(params).toString();
-
-  const res = await fetchWithTimeout(state.apiBase, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
-    },
-    body
-  });
-
-  if (!res.ok) {
-    throw new Error(`API POST error (${res.status})`);
-  }
-
-  return parseJsonSafe(res);
+function cicloNombre(id) {
+  return state.ciclos.find((c) => c.id === id)?.nombre || "—";
+}
+function estudianteNombre(id) {
+  return state.estudiantes.find((e) => e.id === id)?.nombre || "—";
 }
 
-/* -------- Data load -------- */
-async function loadData() {
-  try {
-    const res = await fetchWithTimeout(DATA_URL, { cache: "no-store" }, 15000);
-    if (!res.ok) throw new Error("No se pudo cargar el JSON");
+/* =========================================================
+   ROUTER
+========================================================= */
+const views = {
+  resumen: { title: "Resumen", subtitle: "Estado general del convenio", render: renderResumen },
+  ciclos: { title: "Ciclos y fechas", subtitle: "Fechas de inscripción por ciclo", render: renderCiclos },
+  estudiantes: { title: "Estudiantes", subtitle: "Historial y seguimiento", render: renderEstudiantes },
+  inscripciones: { title: "Inscripciones", subtitle: "Registro por ciclo", render: renderInscripciones },
+  planilla: { title: "Importar planilla", subtitle: "Carga masiva desde el Excel de FESICOL", render: renderPlanilla, admin: true },
+  facturacion: { title: "Facturación", subtitle: "Facturas, cuentas de cobro y soportes", render: renderFacturacion },
+  tarifas: { title: "Tarifas 2026", subtitle: "Precios del convenio", render: renderTarifas },
+  usuarios: { title: "Usuarios", subtitle: "Quién puede acceder al panel", render: renderUsuarios, admin: true }
+};
 
-    const data = await res.json();
-    state.apiBase = safeTrim(data?.api?.baseUrl) || state.apiBase || null;
-    return data;
-  } catch (err) {
-    console.warn("Usando fallback local:", err?.message || err);
-    const fallback = window.__fallbackData;
-    state.apiBase = safeTrim(fallback?.api?.baseUrl) || null;
-    return fallback;
-  }
+async function navigate(view) {
+  if (!views[view]) view = "resumen";
+  if (views[view].admin && !isAdmin()) view = "resumen";
+  state.view = view;
+  $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+  $("#viewTitle").textContent = views[view].title;
+  $("#viewSubtitle").textContent = views[view].subtitle;
+  $("#topbarActions").innerHTML = "";
+  $("#sidebar")?.classList.remove("open");
+  content.innerHTML = `<div class="muted" style="padding:24px">Cargando…</div>`;
+  await views[view].render();
 }
 
-/* -------- Render: Header / Intro -------- */
-function renderHeader(meta = {}) {
-  setText("#title", meta.title || "Alianza FESICOL");
-  setText("#subtitle", meta.subtitle || "Gestión del convenio");
-  setText("#periodoBadge", meta.period ? `Periodo ${meta.period}` : "Periodo");
-  setText(
-    "#lastUpdated",
-    meta.last_updated ? `Actualizado: ${meta.last_updated}` : "Actualizado: —"
-  );
-  setText("#footerNote", state.data?.footer || "Musicala · FESICOL");
-}
+/* ---------- RESUMEN ---------- */
+async function renderResumen() {
+  const ins = state.inscripciones;
+  const ingresosTotal = ins.reduce((a, b) => a + (b.precio || 0), 0);
+  const mes = monthISO();
+  const ingresosMes = ins.filter((i) => (i.mes || "").startsWith(mes)).reduce((a, b) => a + (b.precio || 0), 0);
+  const activos = state.estudiantes.filter((e) => e.activo !== false).length;
 
-function renderIntro(intro = {}) {
-  const introCard = $("#introCard");
-  if (!introCard) return;
+  // Próxima fecha límite de inscripción
+  const hoy = todayISO();
+  const prox = state.ciclos
+    .filter((c) => c.fechaLimiteInscripcion && c.fechaLimiteInscripcion >= hoy)
+    .sort((a, b) => a.fechaLimiteInscripcion.localeCompare(b.fechaLimiteInscripcion))[0];
+  const diasRestantes = prox ? Math.ceil((new Date(prox.fechaLimiteInscripcion) - new Date(hoy)) / 86400000) : null;
 
-  introCard.hidden = false;
-  setText("#introTitle", intro.title || "Alcance");
-  setText("#introLead", intro.lead || "");
-
-  const ul = $("#introBullets");
-  if (!ul) return;
-
-  ul.innerHTML = "";
-  (intro.bullets || []).forEach((b) => {
-    const li = document.createElement("li");
-    li.textContent = b;
-    ul.appendChild(li);
-  });
-}
-
-/* -------- Actions -------- */
-function normalizeKind(kind) {
-  const k = String(kind || "operativo").toLowerCase().trim();
-  return k === "administrativo" ? "administrativo" : "operativo";
-}
-
-function createActionCard(item = {}) {
-  const card = document.createElement("article");
-  card.className = "card";
-  card.dataset.kind = normalizeKind(item.kind);
-
-  const h4 = document.createElement("h4");
-  h4.textContent = `${item.icon || "•"} ${item.title || "Acción"}`;
-
-  const p = document.createElement("p");
-  p.textContent = item.description || "";
-
-  const tags = document.createElement("div");
-  tags.className = "tags";
-
-  (item.tags || []).forEach((t) => {
-    const span = document.createElement("span");
-    span.className = "tag";
-    span.textContent = t;
-    tags.appendChild(span);
-  });
-
-  const btn = document.createElement("button");
-  btn.className = "btn";
-  btn.type = "button";
-  btn.innerHTML = `<span class="icon">↗</span> ${getActionButtonLabel(item.action)}`;
-  btn.addEventListener("click", () => handleAction(item.action));
-
-  card.append(h4, p, tags, btn);
-  return card;
-}
-
-function sortActions(actions) {
-  const list = Array.isArray(actions) ? [...actions] : [];
-
-  list.sort((a, b) => {
-    const pa = Number.isFinite(a?.priority) ? a.priority : 9999;
-    const pb = Number.isFinite(b?.priority) ? b.priority : 9999;
-    if (pa !== pb) return pa - pb;
-    return String(a?.title || "").localeCompare(String(b?.title || ""), "es");
-  });
-
-  return list;
-}
-
-function applyActionFilter(filter = "all") {
-  const grid = $("#actionsGrid");
-  if (!grid) return;
-
-  [...grid.children].forEach((card) => {
-    const kind = card.dataset.kind;
-    card.style.display = filter === "all" || filter === kind ? "" : "none";
-  });
-}
-
-function renderActions(actions) {
-  const grid = $("#actionsGrid");
-  if (!grid) return;
-
-  grid.innerHTML = "";
-
-  const ordered = sortActions(actions);
-  ordered.forEach((a) => grid.appendChild(createActionCard(a)));
-
-  const activeChip = $(".chip.active");
-  const filter = activeChip?.dataset?.filter || "all";
-  applyActionFilter(filter);
-}
-
-function initChipsOnce() {
-  $$(".chip").forEach((chip) => {
-    if (chip.dataset.wired === "1") return;
-    chip.dataset.wired = "1";
-
-    chip.addEventListener("click", () => {
-      $$(".chip").forEach((c) => {
-        c.classList.remove("active");
-        c.setAttribute("aria-selected", "false");
-      });
-
-      chip.classList.add("active");
-      chip.setAttribute("aria-selected", "true");
-      applyActionFilter(chip.dataset.filter || "all");
-    });
-  });
-}
-
-/* -------- KPIs -------- */
-function renderKPIsFromStats(stats = {}) {
   const kpis = [
-    { label: "Estudiantes inscritos", value: stats?.inscritos_total ?? "—" },
-    { label: "Estudiantes activos", value: stats?.activos_total ?? "—" }
+    { icon: "💰", label: "Ingresos totales", value: formatCOP(ingresosTotal) },
+    { icon: "📆", label: `Ingresos ${mes}`, value: formatCOP(ingresosMes) },
+    { icon: "👥", label: "Estudiantes activos", value: activos },
+    { icon: "📝", label: "Inscripciones", value: ins.length }
   ];
 
-  const sec = $("#kpisSection");
-  const grid = $("#kpisGrid");
-  if (!sec || !grid) return;
+  // Alertas: ciclos cuya fecha límite cae dentro de los próximos 30 días
+  const proximos = state.ciclos
+    .filter((c) => { const d = diasHasta(c.fechaLimiteInscripcion); return d !== null && d >= 0 && d <= 30; })
+    .sort((a, b) => a.fechaLimiteInscripcion.localeCompare(b.fechaLimiteInscripcion));
+  const alerta = proximos.length
+    ? proximos.map((c) => {
+        const d = diasHasta(c.fechaLimiteInscripcion);
+        return `<div class="alert ${d <= 7 ? "warn" : "info"}">
+          <strong>⏰ ${esc(c.nombre)}:</strong> cierre de inscripción ${esc(c.fechaLimiteInscripcion)}
+          — ${d === 0 ? "¡hoy!" : `faltan ${d} día${d === 1 ? "" : "s"}`}</div>`;
+      }).join("")
+    : `<div class="alert info">No hay fechas de inscripción en los próximos 30 días. Revísalas en <b>Ciclos y fechas</b>.</div>`;
 
-  grid.innerHTML = "";
+  // Ingresos por mes (últimos 6 meses con datos)
+  const ingresosPorMes = {};
+  ins.forEach((i) => { if (i.mes) ingresosPorMes[i.mes] = (ingresosPorMes[i.mes] || 0) + (i.precio || 0); });
+  const chartData = Object.keys(ingresosPorMes).sort().slice(-6)
+    .map((ym) => ({ label: mesLabel(ym), value: ingresosPorMes[ym] }));
 
-  kpis.forEach((k) => {
-    const el = document.createElement("div");
-    el.className = "kpi";
-    el.innerHTML = `
-      <div class="value">${k.value}</div>
-      <div class="label">${k.label}</div>
-    `;
-    grid.appendChild(el);
+  // Calendario de ciclos
+  const timeline = state.ciclos
+    .slice().sort((a, b) => String(a.fechaLimiteInscripcion).localeCompare(String(b.fechaLimiteInscripcion)))
+    .map((c) => {
+      const d = diasHasta(c.fechaLimiteInscripcion);
+      const cls = d === null ? "gray" : d < 0 ? "gray" : d <= 7 ? "warn" : "green";
+      const insN = ins.filter((i) => i.cicloId === c.id).length;
+      return `<div class="tl-item">
+        <div class="tl-dot ${cls}"></div>
+        <div class="tl-body">
+          <strong>${esc(c.nombre)}</strong>
+          <span class="muted sm">Cierre: ${esc(c.fechaLimiteInscripcion || "—")} · Inicio: ${esc(c.fechaInicioClases || "—")}</span>
+          <span class="muted sm">${insN} inscrito(s) ${d !== null && d >= 0 ? `· faltan ${d}d` : d !== null ? "· cerrado" : ""}</span>
+        </div></div>`;
+    }).join("") || `<p class="muted">Sin ciclos.</p>`;
+
+  // Inscripciones por modalidad
+  const porMod = {};
+  ins.forEach((i) => { const m = i.modalidad || "Sin modalidad"; porMod[m] = (porMod[m] || 0) + 1; });
+  const modRows = Object.entries(porMod).sort((a, b) => b[1] - a[1])
+    .map(([m, n]) => `<tr><td>${esc(m)}</td><td>${n}</td></tr>`).join("") || `<tr><td colspan="2" class="muted">Sin datos aún.</td></tr>`;
+
+  // Últimas inscripciones
+  const ultimas = ins.slice(0, 6).map((i) => `
+    <tr><td>${esc(estudianteNombre(i.estudianteId) || i.estudianteNombre || "—")}</td>
+        <td>${esc(cicloNombre(i.cicloId))}</td>
+        <td>${esc(i.modalidad || "—")}</td>
+        <td>${formatCOP(i.precio)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Aún no hay inscripciones.</td></tr>`;
+
+  content.innerHTML = `
+    ${alerta}
+    <div class="kpis">
+      ${kpis.map((k) => `<div class="kpi"><div class="kpi-icon">${k.icon}</div><div class="kpi-value">${k.value}</div><div class="kpi-label">${k.label}</div></div>`).join("")}
+    </div>
+    <div class="grid-2 gap">
+      <section class="panel">
+        <h3>Ingresos por mes</h3>
+        ${barChart(chartData)}
+      </section>
+      <section class="panel">
+        <h3>Calendario de ciclos</h3>
+        <div class="timeline">${timeline}</div>
+      </section>
+    </div>
+    <div class="grid-2 gap">
+      <section class="panel">
+        <h3>Inscripciones por modalidad</h3>
+        <table class="data-table"><thead><tr><th>Modalidad</th><th>#</th></tr></thead><tbody>${modRows}</tbody></table>
+      </section>
+      <section class="panel">
+        <h3>Últimas inscripciones</h3>
+        <table class="data-table"><thead><tr><th>Estudiante</th><th>Ciclo</th><th>Modalidad</th><th>Precio</th></tr></thead><tbody>${ultimas}</tbody></table>
+      </section>
+    </div>`;
+}
+
+/* ---------- CICLOS ---------- */
+async function renderCiclos() {
+  $("#topbarActions").innerHTML = adminOnly(`<button class="btn primary sm" id="addCiclo">+ Nuevo ciclo</button>`);
+  $("#addCiclo") && ($("#addCiclo").onclick = () => formCiclo());
+
+  const hoy = todayISO();
+  const rows = state.ciclos.map((c) => {
+    const insN = state.inscripciones.filter((i) => i.cicloId === c.id).length;
+    const vencido = c.fechaLimiteInscripcion && c.fechaLimiteInscripcion < hoy;
+    return `<tr>
+      <td><strong>${esc(c.nombre)}</strong></td>
+      <td>${esc(c.fechaLimiteInscripcion || "—")} ${vencido ? '<span class="pill gray">cerrado</span>' : ""}</td>
+      <td>${esc(c.fechaInicioClases || "—")}</td>
+      <td><span class="pill ${c.estado === "abierto" ? "green" : "blue"}">${esc(c.estado || "—")}</span></td>
+      <td>${insN}</td>
+      <td class="row-actions">${adminOnly(`
+        <button class="link-btn" data-edit="${c.id}">Editar</button>
+        <button class="link-btn danger" data-del="${c.id}">Eliminar</button>`)}
+      </td></tr>`;
+  }).join("") || `<tr><td colspan="6" class="muted">Sin ciclos. Crea el primero.</td></tr>`;
+
+  content.innerHTML = `<section class="panel"><table class="data-table">
+    <thead><tr><th>Ciclo</th><th>Límite inscripción</th><th>Inicio clases</th><th>Estado</th><th>Inscritos</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></section>`;
+
+  content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => {
+    formCiclo(state.ciclos.find((c) => c.id === b.dataset.edit));
   });
-
-  sec.hidden = false;
-}
-
-async function loadStatsAndRender() {
-  if (!state.apiBase) return;
-
-  try {
-    const endpoint = getApiEndpoint("stats", "stats");
-    const stats = await apiGet({ action: endpoint });
-    renderKPIsFromStats(stats);
-  } catch (e) {
-    console.warn("No pude traer stats:", e?.message || e);
-  }
-}
-
-/* -------- Modales -------- */
-function closeDialog(dialog) {
-  if (dialog?.open) dialog.close();
-}
-
-function showDialog(dialog, fallbackUrl = "") {
-  if (!dialog) return;
-
-  if (typeof dialog.showModal === "function") {
-    if (!dialog.open) dialog.showModal();
-  } else if (fallbackUrl) {
-    window.open(fallbackUrl, "_blank", "noopener");
-  } else {
-    toast("Tu navegador no soporta modales nativos.", "error");
-  }
-}
-
-function wireDialogCloseByBackdrop(dialog) {
-  if (!dialog || dialog.dataset.backdropWired === "1") return;
-  dialog.dataset.backdropWired = "1";
-
-  dialog.addEventListener("click", (e) => {
-    const rect = dialog.getBoundingClientRect();
-    const inside =
-      e.clientX >= rect.left &&
-      e.clientX <= rect.right &&
-      e.clientY >= rect.top &&
-      e.clientY <= rect.bottom;
-
-    if (!inside) dialog.close();
-  });
-}
-
-wireDialogCloseByBackdrop(imgModal);
-wireDialogCloseByBackdrop(tableModal);
-wireDialogCloseByBackdrop(addModal);
-wireDialogCloseByBackdrop(billingModal);
-
-$("#closeModal")?.addEventListener("click", () => closeDialog(imgModal));
-$("#closeTableModal")?.addEventListener("click", () => closeDialog(tableModal));
-$("#closeAddModal")?.addEventListener("click", () => closeDialog(addModal));
-$("#closeBillingModal")?.addEventListener("click", () => closeDialog(billingModal));
-
-/* -------- CSV: parser + tabla -------- */
-function parseCSV(text) {
-  const rows = [];
-  let row = [];
-  let field = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-
-    if (ch === '"') {
-      if (inQuotes && text[i + 1] === '"') {
-        field += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-
-    if (ch === "," && !inQuotes) {
-      row.push(field);
-      field = "";
-      continue;
-    }
-
-    if ((ch === "\n" || ch === "\r") && !inQuotes) {
-      if (ch === "\r" && text[i + 1] === "\n") i++;
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = "";
-      continue;
-    }
-
-    field += ch;
-  }
-
-  if (field.length || row.length) {
-    row.push(field);
-    rows.push(row);
-  }
-
-  return rows;
-}
-
-function removeStaticNote() {
-  const noteEl = $("#staticNote");
-  if (noteEl) {
-    noteEl.textContent = "";
-    noteEl.style.display = "none";
-  }
-}
-
-function buildTable(headers, rows, columnsWanted) {
-  const thead = $("#dataTable thead");
-  const tbody = $("#dataTable tbody");
-  if (!thead || !tbody) return;
-
-  thead.innerHTML = "";
-  tbody.innerHTML = "";
-
-  let indices = headers.map((_, i) => i);
-  let finalHeaders = headers;
-
-  if (Array.isArray(columnsWanted) && columnsWanted.length) {
-    const normal = (s) => String(s || "").trim().toLowerCase();
-    const wanted = columnsWanted.map((c) => normal(c));
-
-    const mapped = wanted.map((wc) => headers.findIndex((h) => normal(h) === wc));
-    const filteredHeaders = [];
-    const filteredIdx = [];
-
-    mapped.forEach((idx, i) => {
-      if (idx >= 0) {
-        filteredHeaders.push(columnsWanted[i]);
-        filteredIdx.push(idx);
-      }
-    });
-
-    if (filteredHeaders.length) {
-      finalHeaders = filteredHeaders;
-      indices = filteredIdx;
-    }
-  }
-
-  const trh = document.createElement("tr");
-  finalHeaders.forEach((h) => {
-    const th = document.createElement("th");
-    th.textContent = h;
-    trh.appendChild(th);
-  });
-  thead.appendChild(trh);
-
-  rows.forEach((r) => {
-    const tr = document.createElement("tr");
-    indices.forEach((idx) => {
-      const td = document.createElement("td");
-      td.textContent = r[idx] ?? "";
-      tr.appendChild(td);
-    });
-    tbody.appendChild(tr);
+  content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
+    if (!confirm("¿Eliminar este ciclo?")) return;
+    await DB.deleteCiclo(b.dataset.del);
+    await refresh();
   });
 }
 
-function bindTableSearch() {
-  const search = $("#tableSearch");
-  const tbody = $("#dataTable tbody");
-  const empty = $("#tableEmpty");
-
-  if (!search || !tbody || !empty) return;
-
-  const allRows = () => Array.from(tbody.querySelectorAll("tr"));
-
-  function applyFilter() {
-    const q = search.value.trim().toLowerCase();
-    let visible = 0;
-
-    allRows().forEach((tr) => {
-      const match = tr.textContent.toLowerCase().includes(q);
-      tr.style.display = match ? "" : "none";
-      if (match) visible++;
-    });
-
-    empty.style.display = visible ? "none" : "block";
-  }
-
-  const debounce = (fn, t = 160) => {
-    let id;
-    return (...a) => {
-      clearTimeout(id);
-      id = window.setTimeout(() => fn(...a), t);
-    };
+function formCiclo(c = null) {
+  openModal(c ? "Editar ciclo" : "Nuevo ciclo", `
+    <form id="f" class="form">
+      <label class="field"><span>Nombre</span><input name="nombre" value="${esc(c?.nombre || "")}" required></label>
+      <div class="grid-2">
+        <label class="field"><span>Límite de inscripción</span><input name="fechaLimiteInscripcion" type="date" value="${esc(c?.fechaLimiteInscripcion || "")}"></label>
+        <label class="field"><span>Inicio de clases</span><input name="fechaInicioClases" type="date" value="${esc(c?.fechaInicioClases || "")}"></label>
+      </div>
+      <label class="field"><span>Estado</span>
+        <select name="estado">
+          ${["planeado", "abierto", "cerrado"].map((s) => `<option ${c?.estado === s ? "selected" : ""}>${s}</option>`).join("")}
+        </select>
+      </label>
+      <div class="form-row"><button class="btn primary" type="submit">Guardar</button></div>
+    </form>`);
+  $("#f").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    if (!c) fd.orden = state.ciclos.length + 1;
+    await DB.saveCiclo(fd, c?.id || null);
+    closeModal(); await refresh();
+    toast("Ciclo guardado ✅", "success");
   };
-
-  search.oninput = debounce(applyFilter, 160);
-  search.value = "";
-  applyFilter();
 }
 
-async function openTableModal(title, src, columnsWanted) {
-  setText("#tableModalTitle", title || "Datos");
+/* ---------- ESTUDIANTES ---------- */
+async function renderEstudiantes() {
+  $("#topbarActions").innerHTML = `<input id="qEst" class="search" placeholder="Buscar…"><button class="btn secondary sm" id="expEst">⬇ Excel</button>` + adminOnly(`<button class="btn primary sm" id="addEst">+ Estudiante</button>`);
+  $("#addEst") && ($("#addEst").onclick = () => formEstudiante());
+  $("#expEst").onclick = () => exportToExcel(state.estudiantes.map((e) => ({
+    Estudiante: e.nombre, Edad: e.edad ?? "", Asociado: e.asociadoNombre ?? "", "Documento asociado": e.asociadoDocumento ?? "",
+    Parentesco: e.parentesco ?? "", Telefono: e.telefono ?? "", Estado: e.activo === false ? "inactivo" : "activo",
+    Inscripciones: state.inscripciones.filter((i) => i.estudianteId === e.id).length
+  })), "estudiantes-fesicol.xlsx", "Estudiantes");
 
-  const dlBtn = $("#downloadCSV");
-  if (dlBtn) {
-    dlBtn.style.display = "";
-    dlBtn.setAttribute("href", src);
-  }
-
-  removeStaticNote();
-  setLoading(true, "Cargando tabla…");
-
-  try {
-    const res = await fetchWithTimeout(src, { cache: "no-store" }, 20000);
-    if (!res.ok) throw new Error("No se pudo cargar el CSV");
-
-    const text = await res.text();
-    const rows = parseCSV(text).filter((r) => r.some((c) => c && String(c).trim() !== ""));
-    if (!rows.length) throw new Error("CSV vacío");
-
-    const headers = rows[0];
-    const data = rows.slice(1);
-
-    buildTable(headers, data, columnsWanted);
-    bindTableSearch();
-    showDialog(tableModal, src);
-  } catch (e) {
-    console.error(e);
-    toast(`Error cargando la tabla: ${e?.message || e}`, "error", 5200);
-  } finally {
-    setLoading(false);
-  }
+  const draw = (q = "") => {
+    const list = state.estudiantes.filter((e) => !q || (e.nombre || "").toLowerCase().includes(q) || (e.asociadoNombre || "").toLowerCase().includes(q));
+    const rows = list.map((e) => {
+      const insN = state.inscripciones.filter((i) => i.estudianteId === e.id).length;
+      return `<tr>
+        <td><strong>${esc(e.nombre)}</strong></td>
+        <td>${esc(e.asociadoNombre || "—")}</td>
+        <td>${esc(e.parentesco || "—")}</td>
+        <td>${esc(e.telefono || "—")}</td>
+        <td>${insN}</td>
+        <td><span class="pill ${e.activo === false ? "gray" : "green"}">${e.activo === false ? "inactivo" : "activo"}</span></td>
+        <td class="row-actions">
+          <button class="link-btn" data-hist="${e.id}">Historial</button>${adminOnly(`
+          <button class="link-btn" data-edit="${e.id}">Editar</button>
+          <button class="link-btn danger" data-del="${e.id}">Eliminar</button>`)}
+        </td></tr>`;
+    }).join("") || `<tr><td colspan="7" class="muted">Sin estudiantes.</td></tr>`;
+    content.innerHTML = `<section class="panel"><table class="data-table">
+      <thead><tr><th>Estudiante</th><th>Asociado</th><th>Parentesco</th><th>Teléfono</th><th>Inscrip.</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></section>`;
+    content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => formEstudiante(state.estudiantes.find((x) => x.id === b.dataset.edit)));
+    content.querySelectorAll("[data-hist]").forEach((b) => b.onclick = () => verHistorial(b.dataset.hist));
+    content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
+      if (!confirm("¿Eliminar estudiante?")) return;
+      await DB.deleteEstudiante(b.dataset.del); await refresh();
+    });
+  };
+  draw();
+  $("#qEst").oninput = (e) => draw(e.target.value.trim().toLowerCase());
 }
 
-/* -------- Static table -------- */
-function openStaticTableModal(title, columns, rows, note = "") {
-  setText("#tableModalTitle", title || "Datos");
-
-  const dlBtn = $("#downloadCSV");
-  if (dlBtn) {
-    dlBtn.style.display = "none";
-    dlBtn.removeAttribute("href");
-  }
-
-  const wrap = $("#dataTable")?.closest(".table-wrap");
-  let noteEl = $("#staticNote");
-
-  if (!noteEl && wrap) {
-    noteEl = document.createElement("div");
-    noteEl.id = "staticNote";
-    noteEl.className = "static-note muted";
-    wrap.prepend(noteEl);
-  }
-
-  if (noteEl) {
-    noteEl.textContent = note ? String(note) : "";
-    noteEl.style.display = note ? "" : "none";
-  }
-
-  const headers =
-    Array.isArray(columns) && columns.length ? columns : ["Campo", "Valor"];
-
-  const data = (Array.isArray(rows) ? rows : []).map((r) =>
-    Array.isArray(r) ? r : [String(r)]
-  );
-
-  buildTable(headers, data, null);
-  bindTableSearch();
-  showDialog(tableModal);
+function formEstudiante(s = null) {
+  openModal(s ? "Editar estudiante" : "Nuevo estudiante", `
+    <form id="f" class="form">
+      <div class="grid-2">
+        <label class="field"><span>Nombre del inscrito</span><input name="nombre" value="${esc(s?.nombre || "")}" required></label>
+        <label class="field"><span>Edad</span><input name="edad" type="number" value="${esc(s?.edad || "")}"></label>
+      </div>
+      <div class="grid-2">
+        <label class="field"><span>Nombre del asociado</span><input name="asociadoNombre" value="${esc(s?.asociadoNombre || "")}"></label>
+        <label class="field"><span>Documento asociado</span><input name="asociadoDocumento" value="${esc(s?.asociadoDocumento || "")}"></label>
+      </div>
+      <div class="grid-2">
+        <label class="field"><span>Parentesco</span><input name="parentesco" placeholder="Hijo/a, cónyuge… (vacío si es el asociado)" value="${esc(s?.parentesco || "")}"></label>
+        <label class="field"><span>Teléfono</span><input name="telefono" value="${esc(s?.telefono || "")}"></label>
+      </div>
+      <label class="field"><span>Estado</span>
+        <select name="activo">
+          <option value="true" ${s?.activo !== false ? "selected" : ""}>Activo</option>
+          <option value="false" ${s?.activo === false ? "selected" : ""}>Inactivo</option>
+        </select>
+      </label>
+      <div class="form-row"><button class="btn primary" type="submit">Guardar</button></div>
+    </form>`);
+  $("#f").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    fd.activo = fd.activo === "true";
+    fd.edad = fd.edad ? Number(fd.edad) : null;
+    await DB.saveEstudiante(fd, s?.id || null);
+    closeModal(); await refresh();
+    toast("Estudiante guardado ✅", "success");
+  };
 }
 
-/* -------- Agregar inscripción -------- */
-function wireAddModalOnce() {
-  if (state.addModalWired) return;
-  state.addModalWired = true;
+async function verHistorial(estId) {
+  const est = state.estudiantes.find((e) => e.id === estId);
+  const ins = state.inscripciones.filter((i) => i.estudianteId === estId);
+  const rows = ins.map((i) => `<tr><td>${esc(cicloNombre(i.cicloId))}</td><td>${esc(i.mes || "—")}</td><td>${esc(i.modalidad || "—")}</td><td>${esc(i.duracion || "—")}</td><td>${formatCOP(i.precio)}</td><td>${esc(i.estado || "—")}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Sin inscripciones registradas.</td></tr>`;
+  const total = ins.reduce((a, b) => a + (b.precio || 0), 0);
+  openModal(`Historial · ${est?.nombre || ""}`, `
+    <table class="data-table"><thead><tr><th>Ciclo</th><th>Mes</th><th>Modalidad</th><th>Duración</th><th>Precio</th><th>Estado</th></tr></thead><tbody>${rows}</tbody></table>
+    <p style="margin-top:12px"><strong>Total facturado a este estudiante:</strong> ${formatCOP(total)}</p>`);
+}
 
-  const inpInscrito = $("#addNombreInscrito");
-  const inpAsociado = $("#addNombreAsociado");
-  const inpCurso = $("#addCurso");
-  const inpTel = $("#addTelefono");
+/* ---------- INSCRIPCIONES ---------- */
+async function renderInscripciones() {
+  $("#topbarActions").innerHTML = `<button class="btn secondary sm" id="expIns">⬇ Excel</button>` + adminOnly(`<button class="btn primary sm" id="addIns">+ Inscripción</button>`);
+  $("#addIns") && ($("#addIns").onclick = () => formInscripcion());
+  $("#expIns").onclick = () => exportToExcel(state.inscripciones.map((i) => ({
+    Estudiante: estudianteNombre(i.estudianteId) || i.estudianteNombre || "", Ciclo: cicloNombre(i.cicloId), Mes: i.mes ?? "",
+    Servicio: i.servicio ?? "", Modalidad: i.modalidad ?? "", Duracion: i.duracion ?? "", Precio: i.precio ?? 0, Estado: i.estado ?? ""
+  })), "inscripciones-fesicol.xlsx", "Inscripciones");
 
-  if (!inpInscrito || !inpAsociado || !inpCurso || !inpTel) return;
+  const rows = state.inscripciones.map((i) => `<tr>
+      <td><strong>${esc(estudianteNombre(i.estudianteId) || i.estudianteNombre || "—")}</strong></td>
+      <td>${esc(cicloNombre(i.cicloId))}</td>
+      <td>${esc(i.mes || "—")}</td>
+      <td>${esc(i.modalidad || "—")}</td>
+      <td>${esc(i.duracion || "—")}</td>
+      <td>${formatCOP(i.precio)}</td>
+      <td><span class="pill blue">${esc(i.estado || "—")}</span></td>
+      <td class="row-actions">${adminOnly(`
+        <button class="link-btn" data-edit="${i.id}">Editar</button>
+        <button class="link-btn danger" data-del="${i.id}">Eliminar</button>`)}
+      </td></tr>`).join("") || `<tr><td colspan="8" class="muted">Sin inscripciones.</td></tr>`;
 
-  function clearDependentFields() {
-    inpAsociado.value = "";
-    inpCurso.value = "";
-    inpTel.value = "";
-  }
-
-  function fillFromList() {
-    const v = safeTrim(inpInscrito.value);
-    if (!v) {
-      clearDependentFields();
-      return;
-    }
-
-    const s = state.studentsCache.find(
-      (x) => normalizeText(x.nombreInscrito) === normalizeText(v)
-    );
-
-    if (s) {
-      inpAsociado.value = s.nombreAsociado || "";
-      inpCurso.value = s.curso || s.instrumento || "";
-      inpTel.value = s.telefono || "";
-    }
-  }
-
-  inpInscrito.addEventListener("change", fillFromList);
-  inpInscrito.addEventListener("input", () => {
-    if (!inpInscrito.value) clearDependentFields();
+  content.innerHTML = `<section class="panel"><table class="data-table">
+    <thead><tr><th>Estudiante</th><th>Ciclo</th><th>Mes</th><th>Modalidad</th><th>Duración</th><th>Precio</th><th>Estado</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></section>`;
+  content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => formInscripcion(state.inscripciones.find((x) => x.id === b.dataset.edit)));
+  content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
+    if (!confirm("¿Eliminar inscripción?")) return;
+    await DB.deleteInscripcion(b.dataset.del); await refresh();
   });
 }
 
-async function openAddModal() {
-  if (!requireApi()) return;
-
-  setLoading(true, "Cargando estudiantes…");
-
-  try {
-    const endpoint = getApiEndpoint("students", "students");
-    const res = await apiGet({ action: endpoint });
-    state.studentsCache = Array.isArray(res?.data) ? res.data : [];
-
-    const dl = $("#listaEstudiantes");
-    if (dl) {
-      dl.innerHTML = "";
-      state.studentsCache.forEach((s) => {
-        const opt = document.createElement("option");
-        opt.value = s.nombreInscrito || "";
-        dl.appendChild(opt);
-      });
+function formInscripcion(i = null) {
+  const estOpts = state.estudiantes.map((e) => `<option value="${e.id}" ${i?.estudianteId === e.id ? "selected" : ""}>${esc(e.nombre)}</option>`).join("");
+  const cicloOpts = state.ciclos.map((c) => `<option value="${c.id}" ${i?.cicloId === c.id ? "selected" : ""}>${esc(c.nombre)}</option>`).join("");
+  const tarifaOpts = state.tarifas.map((t) => `<option value="${t.precio}" ${i?.servicio === t.servicio ? "selected" : ""} data-serv="${esc(t.servicio)}">${esc(t.servicio)} — ${formatCOP(t.precio)}</option>`).join("");
+  openModal(i ? "Editar inscripción" : "Nueva inscripción", `
+    <form id="f" class="form">
+      <div class="grid-2">
+        <label class="field"><span>Estudiante</span><select name="estudianteId" required><option value="">Selecciona…</option>${estOpts}</select></label>
+        <label class="field"><span>Ciclo</span><select name="cicloId" required><option value="">Selecciona…</option>${cicloOpts}</select></label>
+      </div>
+      <div class="grid-2">
+        <label class="field"><span>Mes</span><input name="mes" type="month" value="${esc(i?.mes || monthISO())}"></label>
+        <label class="field"><span>Servicio / Tarifa</span><select name="servicio" id="servSel"><option value="">Selecciona…</option>${tarifaOpts}</select></label>
+      </div>
+      <div class="grid-2">
+        <label class="field"><span>Modalidad</span><input name="modalidad" value="${esc(i?.modalidad || "")}"></label>
+        <label class="field"><span>Duración</span><input name="duracion" value="${esc(i?.duracion || "")}"></label>
+      </div>
+      <div class="grid-2">
+        <label class="field"><span>Precio (COP)</span><input name="precio" id="precioInp" type="text" value="${i?.precio ? i.precio : ""}"></label>
+        <label class="field"><span>Estado</span>
+          <select name="estado">${["Inscrito", "Activo", "Facturado", "Pagado", "Retirado"].map((s) => `<option ${i?.estado === s ? "selected" : ""}>${s}</option>`).join("")}</select>
+        </label>
+      </div>
+      <div class="form-row"><button class="btn primary" type="submit">Guardar</button></div>
+    </form>`);
+  const servSel = $("#servSel");
+  servSel.onchange = () => {
+    const opt = servSel.selectedOptions[0];
+    if (opt?.value) {
+      $("#precioInp").value = opt.value;
+      const serv = opt.dataset.serv || "";
+      // Intenta derivar modalidad/duración del nombre del servicio
+      const f = $("#f");
+      if (!f.modalidad.value) f.modalidad.value = serv.split(" Paquete")[0].split(" 1 mes")[0];
     }
-
-    const monthInput = $("#addMes");
-    if (monthInput && !monthInput.value) {
-      monthInput.value = normalizeMonthValue();
-    }
-
-    wireAddModalOnce();
-    showDialog(addModal);
-  } catch (e) {
-    console.error(e);
-    toast("No pude cargar la base de estudiantes.", "error", 4200);
-  } finally {
-    setLoading(false);
-  }
+  };
+  $("#f").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    fd.precio = parsePrice(fd.precio);
+    fd.estudianteNombre = estudianteNombre(fd.estudianteId);
+    await DB.saveInscripcion(fd, i?.id || null);
+    closeModal(); await refresh();
+    toast("Inscripción guardada ✅", "success");
+  };
 }
 
-addForm?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!requireApi()) return;
+/* ---------- FACTURACIÓN ---------- */
+async function renderFacturacion() {
+  $("#topbarActions").innerHTML = `<button class="btn secondary sm" id="expFac">⬇ Excel</button>` + adminOnly(`<button class="btn primary sm" id="addFac">+ Documento</button>`);
+  $("#addFac") && ($("#addFac").onclick = () => formFactura());
+  $("#expFac").onclick = () => exportToExcel(state.facturas.map((f) => ({
+    Documento: f.nombre ?? "", Tipo: f.tipo ?? "", Periodo: f.periodo ?? "", Valor: f.valor ?? 0,
+    Estado: f.estado ?? "", Responsable: f.responsable ?? "", Nota: f.nota ?? "", Archivo: f.archivoUrl ?? ""
+  })), "facturacion-fesicol.xlsx", "Facturacion");
 
-  const item = {
-    nombreAsociado: safeTrim($("#addNombreAsociado")?.value),
-    nombreInscrito: safeTrim($("#addNombreInscrito")?.value),
-    curso: safeTrim($("#addCurso")?.value),
-    telefono: safeTrim($("#addTelefono")?.value),
-    mes: safeTrim($("#addMes")?.value)
-  };
+  const total = state.facturas.reduce((a, b) => a + (b.valor || 0), 0);
+  const rows = state.facturas.map((f) => `<tr>
+      <td>${f.archivoUrl ? `<a href="${esc(f.archivoUrl)}" target="_blank" rel="noopener">${esc(f.nombre || "Documento")}</a>` : esc(f.nombre || "—")}</td>
+      <td>${esc(f.tipo || "—")}</td>
+      <td>${esc(f.periodo || "—")}</td>
+      <td>${formatCOP(f.valor)}</td>
+      <td><span class="pill blue">${esc(f.estado || "—")}</span></td>
+      <td class="row-actions">${adminOnly(`
+        <button class="link-btn" data-edit="${f.id}">Editar</button>
+        <button class="link-btn danger" data-del="${f.id}">Eliminar</button>`)}
+      </td></tr>`).join("") || `<tr><td colspan="6" class="muted">Sin documentos.</td></tr>`;
 
-  if (!item.nombreInscrito || !item.nombreAsociado || !item.curso || !item.telefono || !item.mes) {
-    toast("Completa todos los campos de la inscripción.", "error");
-    return;
-  }
-
-  const found = state.studentsCache.find(
-    (x) => normalizeText(x.nombreInscrito) === normalizeText(item.nombreInscrito)
-  );
-
-  if (!found) {
-    toast("Selecciona un estudiante válido de la base oficial.", "error", 4200);
-    return;
-  }
-
-  setLoading(true, "Guardando inscripción…");
-
-  try {
-    const endpoint = getEnrollmentEndpoint();
-    const r = await apiPost({
-      action: endpoint,
-      item: JSON.stringify(item)
-    });
-
-    if (r?.ok) {
-      toast("Inscripción guardada ✅", "success");
-      closeDialog(addModal);
-      addForm.reset();
-      await loadStatsAndRender();
-    } else {
-      const reason = r?.error ? ` Motivo: ${r.error}` : "";
-      toast("No pude guardar la inscripción." + reason, "error", 5200);
-      console.error("API response:", r);
-    }
-  } catch (err) {
-    console.error(err);
-    toast("No pude guardar la inscripción. " + (err?.message || ""), "error", 5200);
-  } finally {
-    setLoading(false);
-  }
-});
-
-/* -------- Facturación / contratos -------- */
-function renderBillingRows(rows = [], cfg = {}) {
-  if (!billingTableBody || !billingEmpty) return;
-
-  billingTableBody.innerHTML = "";
-
-  const normalized = Array.isArray(rows) ? rows : [];
-  const hasRows = normalized.length > 0;
-  billingEmpty.style.display = hasRows ? "none" : "block";
-
-  normalized.forEach((item) => {
-    const tr = document.createElement("tr");
-
-    const values = [
-      item.nombre_documento || item.documento || "",
-      item.tipo_documento || item.tipo || "",
-      item.periodo || "",
-      item.estado || "",
-      item.updated_at || item.ultima_actualizacion || item.created_at || "",
-      item.nota || ""
-    ];
-
-    values.forEach((val, idx) => {
-      const td = document.createElement("td");
-
-      if (idx === 0 && item.archivo_url) {
-        const a = document.createElement("a");
-        a.href = item.archivo_url;
-        a.target = "_blank";
-        a.rel = "noopener noreferrer";
-        a.textContent = val || "Abrir documento";
-        td.appendChild(a);
-      } else {
-        td.textContent = val ?? "";
-      }
-
-      tr.appendChild(td);
-    });
-
-    billingTableBody.appendChild(tr);
+  content.innerHTML = `
+    <div class="alert info"><strong>Total facturado registrado:</strong> ${formatCOP(total)}</div>
+    <section class="panel"><table class="data-table">
+    <thead><tr><th>Documento</th><th>Tipo</th><th>Periodo</th><th>Valor</th><th>Estado</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></section>`;
+  content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => formFactura(state.facturas.find((x) => x.id === b.dataset.edit)));
+  content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
+    if (!confirm("¿Eliminar documento?")) return;
+    const f = state.facturas.find((x) => x.id === b.dataset.del);
+    if (f?.archivoPath) await DB.deleteArchivo(f.archivoPath);
+    await DB.deleteFactura(b.dataset.del); await refresh();
   });
-
-  const modalTitle = cfg?.title || "Facturación / Contratos";
-  setText("#billingModalTitle", modalTitle);
 }
 
-async function loadBillingList() {
-  if (!requireApi()) return;
-
-  const endpoint = getApiEndpoint("list_billing", "getBilling");
-  const res = await apiGet({ action: endpoint });
-
-  if (!res?.ok && !Array.isArray(res?.rows) && !Array.isArray(res?.data)) {
-    throw new Error(res?.message || "No se pudo cargar la facturación.");
-  }
-
-  const rows = Array.isArray(res?.rows)
-    ? res.rows
-    : Array.isArray(res?.data)
-      ? res.data
-      : [];
-
-  renderBillingRows(rows, getBillingConfig());
-}
-
-async function submitBillingForm(e) {
-  e.preventDefault();
-  if (!requireApi()) return;
-
-  const payload = {
-    periodo: safeTrim($("#billingPeriodo")?.value),
-    tipo_documento: safeTrim($("#billingTipo")?.value),
-    nombre_documento: safeTrim($("#billingNombre")?.value),
-    estado: safeTrim($("#billingEstado")?.value),
-    responsable: safeTrim($("#billingResponsable")?.value),
-    archivo_url: safeTrim($("#billingArchivoUrl")?.value),
-    nota: safeTrim($("#billingNota")?.value)
-  };
-
-  if (!payload.periodo || !payload.tipo_documento || !payload.nombre_documento || !payload.estado) {
-    toast("Completa los campos obligatorios de facturación.", "error", 4200);
-    return;
-  }
-
-  if (payload.archivo_url) {
+function formFactura(f = null) {
+  openModal(f ? "Editar documento" : "Nuevo documento", `
+    <form id="f" class="form">
+      <div class="grid-2">
+        <label class="field"><span>Nombre del documento</span><input name="nombre" value="${esc(f?.nombre || "")}" placeholder="Ej: Cuenta de cobro junio" required></label>
+        <label class="field"><span>Periodo</span><input name="periodo" type="month" value="${esc(f?.periodo || monthISO())}"></label>
+      </div>
+      <div class="grid-2">
+        <label class="field"><span>Tipo</span>
+          <select name="tipo">${["Factura", "Cuenta de cobro", "Contrato", "Soporte de asistencia", "Otro"].map((s) => `<option ${f?.tipo === s ? "selected" : ""}>${s}</option>`).join("")}</select>
+        </label>
+        <label class="field"><span>Estado</span>
+          <select name="estado">${["Pendiente", "En revisión", "Aprobado", "Firmado", "Radicado", "Pagado"].map((s) => `<option ${f?.estado === s ? "selected" : ""}>${s}</option>`).join("")}</select>
+        </label>
+      </div>
+      <div class="grid-2">
+        <label class="field"><span>Valor (COP)</span><input name="valor" value="${f?.valor || ""}"></label>
+        <label class="field"><span>Responsable</span><input name="responsable" value="${esc(f?.responsable || "")}"></label>
+      </div>
+      <label class="field"><span>Archivo adjunto</span><input name="archivo" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.docx"></label>
+      ${f?.archivoUrl ? `<small class="muted">Actual: <a href="${esc(f.archivoUrl)}" target="_blank">${esc(f.nombre || "ver")}</a></small>` : ""}
+      <label class="field"><span>Nota</span><textarea name="nota" rows="3">${esc(f?.nota || "")}</textarea></label>
+      <div class="form-row"><button class="btn primary" type="submit">Guardar</button></div>
+    </form>`);
+  $("#f").onsubmit = async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fd = Object.fromEntries(new FormData(form));
+    const file = form.archivo.files[0];
+    delete fd.archivo;
+    fd.valor = parsePrice(fd.valor);
     try {
-      new URL(payload.archivo_url);
-    } catch {
-      toast("La URL del archivo no es válida.", "error", 4200);
-      return;
-    }
-  }
-
-  if (billingSubmitBtn) billingSubmitBtn.disabled = true;
-
-  try {
-    const endpoint = getApiEndpoint("add_billing", "addBilling");
-    const res = await apiPost({
-      action: endpoint,
-      ...payload
-    });
-
-    if (!res?.ok) {
-      throw new Error(res?.message || "No se pudo guardar el documento.");
-    }
-
-    toast("Documento guardado en Sheets ✅", "success", 3200);
-    billingForm?.reset();
-
-    const monthInput = $("#billingPeriodo");
-    if (monthInput) monthInput.value = normalizeMonthValue();
-
-    await loadBillingList();
-  } catch (err) {
-    console.error("submitBillingForm:", err);
-    toast(err?.message || "Error guardando documento.", "error", 5200);
-  } finally {
-    if (billingSubmitBtn) billingSubmitBtn.disabled = false;
-  }
-}
-
-function wireBillingModalOnce() {
-  if (state.billingModalWired) return;
-  state.billingModalWired = true;
-
-  billingForm?.addEventListener("submit", submitBillingForm);
-
-  billingRefreshBtn?.addEventListener("click", async () => {
-    try {
-      setLoading(true, "Actualizando facturación…");
-      await loadBillingList();
+      setLoading(true, "Guardando…");
+      if (file) {
+        const up = await DB.uploadArchivo(file, "facturacion");
+        fd.archivoUrl = up.url; fd.archivoPath = up.path;
+      } else if (f) {
+        fd.archivoUrl = f.archivoUrl || ""; fd.archivoPath = f.archivoPath || "";
+      }
+      await DB.saveFactura(fd, f?.id || null);
+      closeModal(); await refresh();
+      toast("Documento guardado ✅", "success");
     } catch (err) {
-      console.error(err);
-      toast(err?.message || "No pude actualizar la lista.", "error", 4200);
-    } finally {
-      setLoading(false);
-    }
+      console.error(err); toast("Error: " + (err?.message || err), "error", 5000);
+    } finally { setLoading(false); }
+  };
+}
+
+/* ---------- TARIFAS ---------- */
+async function renderTarifas() {
+  $("#topbarActions").innerHTML = `<input id="qTar" class="search" placeholder="Buscar servicio…">`;
+  const draw = (q = "") => {
+    const list = state.tarifas.filter((t) => !q || (t.servicio || "").toLowerCase().includes(q));
+    const rows = list.map((t) => `<tr><td>${esc(t.servicio)}</td><td>${formatCOP(t.precio)}</td></tr>`).join("") || `<tr><td colspan="2" class="muted">Sin resultados.</td></tr>`;
+    content.innerHTML = `<section class="panel"><p class="muted sm">Música, danza, teatro y artes plásticas. Tarifas 2026 del convenio.</p>
+      <table class="data-table"><thead><tr><th>Servicio</th><th>Precio</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+    $("#qTar").oninput = (e) => draw(e.target.value.trim().toLowerCase());
+    $("#qTar").value = q;
+    if (q) $("#qTar").focus();
+  };
+  draw();
+}
+
+/* ---------- USUARIOS (gestión de acceso) ---------- */
+async function renderUsuarios() {
+  state.usuarios = await DB.getUsuarios();
+  $("#topbarActions").innerHTML = `<button class="btn primary sm" id="addUsr">+ Agregar usuario</button>`;
+  $("#addUsr").onclick = () => formUsuario();
+
+  const adminRows = ADMIN_EMAILS.map((e) =>
+    `<tr><td>${esc(e)}</td><td><span class="pill blue">admin</span></td><td class="muted sm">fijo</td></tr>`).join("");
+  const lectorRows = state.usuarios
+    .filter((u) => !ADMIN_EMAILS.includes(u.email))
+    .map((u) => `<tr>
+      <td>${esc(u.email)}${u.nombre ? ` <span class="muted">· ${esc(u.nombre)}</span>` : ""}</td>
+      <td><span class="pill ${u.role === "admin" ? "blue" : "gray"}">${esc(u.role || "lector")}</span></td>
+      <td class="row-actions"><button class="link-btn danger" data-del="${esc(u.email)}">Quitar</button></td>
+    </tr>`).join("") || `<tr><td colspan="3" class="muted">Aún no agregaste lectores.</td></tr>`;
+
+  content.innerHTML = `
+    <div class="alert info">Los <b>lectores</b> solo ven la información (no pueden crear, editar ni borrar).
+      Deben ingresar con <b>“Continuar con Google”</b> usando el correo que registres aquí.</div>
+    <section class="panel">
+      <h3>Administradores</h3>
+      <table class="data-table"><thead><tr><th>Correo</th><th>Rol</th><th></th></tr></thead><tbody>${adminRows}</tbody></table>
+    </section>
+    <section class="panel">
+      <h3>Usuarios con acceso de lectura</h3>
+      <table class="data-table"><thead><tr><th>Correo</th><th>Rol</th><th></th></tr></thead><tbody>${lectorRows}</tbody></table>
+    </section>`;
+  content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
+    if (!confirm(`¿Quitar acceso a ${b.dataset.del}?`)) return;
+    await DB.deleteUsuario(b.dataset.del);
+    await renderUsuarios();
+    toast("Usuario removido ✅", "success");
   });
 }
 
-async function openBillingModal() {
-  if (!requireApi()) return;
-
-  wireBillingModalOnce();
-
-  const cfg = getBillingConfig();
-  setText("#billingModalTitle", cfg?.title || "Facturación / Contratos");
-
-  const periodo = $("#billingPeriodo");
-  if (periodo && !periodo.value) {
-    periodo.value = normalizeMonthValue();
-  }
-
-  showDialog(billingModal);
-
-  try {
-    setLoading(true, "Cargando facturación…");
-    await loadBillingList();
-  } catch (err) {
-    console.error("openBillingModal:", err);
-    toast(err?.message || "No pude cargar la facturación.", "error", 4200);
-  } finally {
-    setLoading(false);
-  }
+function formUsuario() {
+  openModal("Agregar usuario", `
+    <form id="f" class="form">
+      <label class="field"><span>Correo (Gmail)</span><input name="email" type="email" placeholder="correo@gmail.com" required></label>
+      <label class="field"><span>Nombre (opcional)</span><input name="nombre"></label>
+      <label class="field"><span>Rol</span>
+        <select name="role"><option value="lector">Lector (solo ver)</option><option value="admin">Administrador</option></select>
+      </label>
+      <small class="muted">El usuario podrá entrar con Google usando ese correo.</small>
+      <div class="form-row"><button class="btn primary" type="submit">Guardar</button></div>
+    </form>`);
+  $("#f").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    await DB.saveUsuario(fd.email, fd);
+    closeModal(); await renderUsuarios();
+    toast("Usuario agregado ✅", "success");
+  };
 }
 
-/* -------- Router de acciones -------- */
-function handleAction(action) {
-  if (!action) return;
+/* ---------- IMPORTAR PLANILLA (Fase 2) ---------- */
+const norm = (s) => String(s ?? "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 
-  if (action.type === "link" && action.href) {
-    const href = resolveActionUrl(action.href);
-    if (!href) {
-      toast("No se encontró el enlace.", "error");
-      return;
-    }
+/** Busca el precio en tarifas combinando modalidad + duración. */
+function matchTarifa(modalidad, duracion) {
+  const m = norm(modalidad), d = norm(duracion);
+  if (!m && !d) return null;
+  // 1) servicio que contenga ambos
+  let t = state.tarifas.find((x) => { const s = norm(x.servicio); return (!m || s.includes(m)) && (!d || s.includes(d)); });
+  if (!t && (m || d)) t = state.tarifas.find((x) => { const s = norm(x.servicio); return (m && s.includes(m)) || (d && s.includes(d)); });
+  return t || null;
+}
 
-    if (action.download) {
-      triggerFileOpen(href, {
-        filename: action.filename,
-        download: true
-      });
-      return;
-    }
+let _pendingPlanilla = null; // filas parseadas en espera de confirmar
 
-    window.open(href, "_blank", "noopener");
-    return;
-  }
+async function renderPlanilla() {
+  const cicloOpts = state.ciclos.map((c) => `<option value="${c.id}">${esc(c.nombre)}</option>`).join("");
+  content.innerHTML = `
+    <div class="alert info"><strong>Importa la planilla mensual de FESICOL.</strong>
+      Sube el Excel tal cual lo envían; el panel lee la hoja <b>FUENTE</b>, te muestra una vista previa y, al confirmar,
+      crea/actualiza estudiantes e inscripciones, calculando el precio según las tarifas 2026.</div>
+    <section class="panel">
+      <div class="grid-2">
+        <label class="field"><span>Ciclo de esta planilla</span><select id="planCiclo"><option value="">— Sin inscripción (solo estudiantes) —</option>${cicloOpts}</select></label>
+        <label class="field"><span>Mes</span><input id="planMes" type="month" value="${monthISO()}"></label>
+      </div>
+      <label class="field"><span>Archivo de la planilla (.xlsx)</span><input id="planFile" type="file" accept=".xlsx,.xls"></label>
+      <div class="form-row"><button class="btn primary" id="planParse">Leer planilla</button></div>
+    </section>
+    <div id="planPreview"></div>`;
 
-  if (action.type === "download_file") {
-    const url = action.url || action.href || action.src;
-    if (!safeTrim(url)) {
-      toast("No se encontró el archivo para descargar.", "error", 4200);
-      return;
-    }
+  $("#planParse").onclick = async () => {
+    const file = $("#planFile").files[0];
+    if (!file) { toast("Selecciona el archivo de la planilla.", "error"); return; }
+    setLoading(true, "Leyendo planilla…");
+    try {
+      const XLSX = await loadXLSX();
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets["FUENTE"] || wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      _pendingPlanilla = parsePlanillaRows(rows, file);
+      drawPlanillaPreview();
+    } catch (err) {
+      console.error(err); toast("No pude leer el Excel: " + (err?.message || err), "error", 5000);
+    } finally { setLoading(false); }
+  };
+}
 
-    triggerFileOpen(url, {
-      filename: action.filename,
-      download: true
+let _xlsxPromise = null;
+function loadXLSX() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (_xlsxPromise) return _xlsxPromise;
+  _xlsxPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+    s.onload = () => resolve(window.XLSX);
+    s.onerror = () => reject(new Error("No se pudo cargar la librería de Excel."));
+    document.head.appendChild(s);
+  });
+  return _xlsxPromise;
+}
+
+/** Detecta la fila de encabezados y extrae los registros. */
+function parsePlanillaRows(rows, file) {
+  // Encuentra la fila que contiene "NOMBRE DEL INSCRITO"
+  let hIdx = rows.findIndex((r) => r.some((c) => norm(c).includes("nombre del inscrito")));
+  if (hIdx < 0) hIdx = 8;
+  const header = rows[hIdx].map(norm);
+  const col = (needle) => header.findIndex((h) => h.includes(needle));
+  const idx = {
+    asociado: col("nombre del asociado"),
+    doc: col("documento"),
+    tel: col("telefono"),
+    inscrito: col("nombre del inscrito"),
+    edad: col("edad"),
+    parentesco: col("parentesco"),
+    modalidad: col("modalidad"),
+    duracion: col("duracion")
+  };
+  const out = [];
+  for (let i = hIdx + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const nombre = String(r[idx.inscrito] ?? "").trim();
+    if (!nombre) continue;
+    const modalidad = String(r[idx.modalidad] ?? "").trim();
+    const duracion = String(r[idx.duracion] ?? "").trim();
+    const tar = matchTarifa(modalidad, duracion);
+    // ¿estudiante ya existe? (por nombre)
+    const existente = state.estudiantes.find((e) => norm(e.nombre) === norm(nombre));
+    out.push({
+      nombre,
+      edad: r[idx.edad] || "",
+      asociadoNombre: String(r[idx.asociado] ?? "").trim(),
+      asociadoDocumento: String(r[idx.doc] ?? "").trim(),
+      telefono: String(r[idx.tel] ?? "").trim(),
+      parentesco: String(r[idx.parentesco] ?? "").trim(),
+      modalidad, duracion,
+      servicio: tar?.servicio || "",
+      precio: tar?.precio || 0,
+      tarifaOk: !!tar,
+      existenteId: existente?.id || null
     });
+  }
+  return { rows: out, fileName: file.name, file };
+}
 
-    if (action.successMessage) {
-      toast(action.successMessage, "success", 2600);
-    }
+function drawPlanillaPreview() {
+  const data = _pendingPlanilla;
+  if (!data || !data.rows.length) {
+    $("#planPreview").innerHTML = `<div class="alert warn">No encontré filas con estudiantes en la planilla.</div>`;
     return;
   }
+  const conCiclo = !!$("#planCiclo").value;
+  const sinTarifa = data.rows.filter((r) => conCiclo && !r.tarifaOk).length;
+  const totalPrecio = data.rows.reduce((a, b) => a + (conCiclo ? b.precio : 0), 0);
 
-  if (action.type === "image_modal" && action.src) {
-    setText("#imgModalTitle", action.title || "Vista");
-    const img = $("#modalImage");
-    if (img) {
-      img.src = action.src;
-      img.alt = action.title || "Vista";
-    }
-    showDialog(imgModal, action.src);
-    return;
-  }
+  const rows = data.rows.map((r) => `<tr>
+    <td>${esc(r.nombre)} ${r.existenteId ? '<span class="pill gray">existe</span>' : '<span class="pill green">nuevo</span>'}</td>
+    <td>${esc(r.asociadoNombre)}</td>
+    <td>${esc(r.parentesco || "—")}</td>
+    <td>${esc(r.modalidad || "—")}</td>
+    <td>${esc(r.duracion || "—")}</td>
+    <td>${conCiclo ? (r.tarifaOk ? formatCOP(r.precio) : '<span class="pill gray">sin tarifa</span>') : "—"}</td>
+  </tr>`).join("");
 
-  if (action.type === "csv_table") {
-    let cfg = action;
+  $("#planPreview").innerHTML = `
+    <section class="panel">
+      <h3>Vista previa · ${esc(data.fileName)} (${data.rows.length} registros)</h3>
+      ${sinTarifa ? `<div class="alert warn">${sinTarifa} registro(s) sin tarifa automática: revisa modalidad/duración o edítalos luego en Inscripciones.</div>` : ""}
+      ${conCiclo ? `<p><strong>Total estimado de la planilla:</strong> ${formatCOP(totalPrecio)}</p>` : `<p class="muted">Sin ciclo seleccionado: solo se cargarán/actualizarán estudiantes (sin inscripción).</p>`}
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Inscrito</th><th>Asociado</th><th>Parentesco</th><th>Modalidad</th><th>Duración</th><th>Precio</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+      <div class="form-row"><button class="btn primary" id="planConfirm">Confirmar e importar</button></div>
+    </section>`;
 
-    if (action.dataset && state.data?.datasets?.[action.dataset]) {
-      const ds = state.data.datasets[action.dataset];
-      cfg = {
-        title: action.title || ds.title,
-        src: ds.src,
-        columns: ds.columns
+  $("#planConfirm").onclick = () => confirmImportPlanilla();
+}
+
+async function confirmImportPlanilla() {
+  const data = _pendingPlanilla;
+  if (!data) return;
+  const cicloId = $("#planCiclo").value;
+  const mes = $("#planMes").value;
+  setLoading(true, "Importando planilla…");
+  try {
+    // Sube el archivo original a Storage como soporte
+    let archivo = {};
+    try { archivo = await DB.uploadArchivo(data.file, "planillas"); } catch (_) {}
+
+    const items = data.rows.map((r) => {
+      const it = {
+        estudianteId: r.existenteId || null,
+        estudiante: {
+          nombre: r.nombre, edad: r.edad ? Number(r.edad) : null,
+          asociadoNombre: r.asociadoNombre, asociadoDocumento: r.asociadoDocumento,
+          telefono: r.telefono, parentesco: r.parentesco
+        },
+        asociado: r.asociadoDocumento ? {
+          documento: r.asociadoDocumento, nombre: r.asociadoNombre, telefono: r.telefono
+        } : null
       };
-    }
-
-    if (!cfg?.src) {
-      toast("No se encontró la fuente CSV.", "error");
-      return;
-    }
-
-    openTableModal(cfg.title || "Datos", cfg.src, cfg.columns);
-    return;
-  }
-
-  if (action.type === "static_table") {
-    openStaticTableModal(
-      action.title || "Datos",
-      action.columns || [],
-      action.rows || [],
-      action.note || ""
-    );
-    return;
-  }
-
-  if (action.type === "add_form") {
-    openAddModal();
-    return;
-  }
-
-  if (action.type === "billing_form") {
-    openBillingModal();
-    return;
-  }
-
-  toast("Acción no soportada aún.", "info");
-}
-
-/* -------- App protegida -------- */
-async function bootApp() {
-  if (state.appBooted) return;
-  state.appBooted = true;
-
-  setLoading(true, "Cargando tablero…");
-
-  try {
-    initChipsOnce();
-
-    const data = await loadData();
-    state.data = data;
-    window.__data = data;
-
-    setThemeColor(data?.meta?.themeColor);
-    renderHeader(data?.meta || {});
-    renderIntro(data?.intro || {});
-    renderActions(data?.actions || []);
-
-    await loadStatsAndRender();
-  } catch (err) {
-    console.error("Error bootApp:", err);
-    toast("No pude cargar el tablero completo.", "error", 4200);
-  } finally {
-    setLoading(false);
-  }
-}
-
-/* -------- Auth -------- */
-async function handleEmailLogin(e) {
-  e.preventDefault();
-
-  const email = safeTrim(loginEmail?.value);
-  const pass = loginPass?.value || "";
-
-  if (!email || !pass) {
-    setAuthMessage("Completa correo y contraseña.");
-    return;
-  }
-
-  setLoading(true, "Ingresando…");
-  clearAuthMessage();
-
-  try {
-    await signInWithEmailAndPassword(auth, email, pass);
-    // onAuthStateChanged se encarga del resto
-  } catch (err) {
-    console.error("Email sign-in error:", err);
-    setLoading(false);
-
-    const msg =
-      prettyAuthError?.(err) ||
-      "No se pudo ingresar. Revisa correo y contraseña.";
-
-    setAuthMessage(msg);
-    toast(msg, "error", 4800);
-  }
-}
-
-async function handleGoogleLogin() {
-  setLoading(true, "Abriendo Google…");
-  clearAuthMessage();
-
-  try {
-    const res = await signInWithGoogle({
-      preferRedirect: isStandaloneMode() || isMobileLike()
+      if (cicloId) {
+        it.inscripcion = {
+          cicloId, mes, modalidad: r.modalidad, duracion: r.duracion,
+          servicio: r.servicio, precio: r.precio
+        };
+      }
+      return it;
     });
 
-    if (!res?.ok) {
-      throw res?.error || new Error(res?.message || "No se pudo iniciar con Google.");
-    }
+    const res = await DB.importPlanilla(items, {
+      cicloId: cicloId || null, mes, archivoUrl: archivo.url || "", archivoPath: archivo.path || "",
+      nombre: data.fileName, estado: "procesada"
+    });
 
-    if (res.method === "redirect") {
-      return;
-    }
-
-    // Si fue popup, onAuthStateChanged termina el flujo.
+    _pendingPlanilla = null;
+    await loadAll();
+    toast(`Planilla importada: ${res.nuevosEst} estudiante(s) nuevo(s), ${res.nuevasIns} inscripción(es) ✅`, "success", 5000);
+    await navigate("inscripciones");
   } catch (err) {
-    console.error("Google Sign-In error:", err);
-    setLoading(false);
+    console.error(err); toast("Error importando: " + (err?.message || err), "error", 6000);
+  } finally { setLoading(false); }
+}
 
-    const msg =
-      prettyAuthError?.(err) ||
-      err?.message ||
-      "No se pudo ingresar con Google.";
+/* =========================================================
+   Refresh + boot
+========================================================= */
+async function refresh() {
+  await loadAll();
+  await views[state.view].render();
+}
 
-    setAuthMessage(msg);
-    toast(msg, "error", 5200);
+async function bootApp() {
+  if (state.booted) return;
+  state.booted = true;
+  setLoading(true, "Preparando panel…");
+  try {
+    // Solo el admin siembra datos (los lectores no tienen permiso de escritura)
+    if (isAdmin()) await ensureSeed();
+    await loadAll();
+    await navigate("resumen");
+  } catch (e) {
+    console.error("bootApp:", e);
+    toast("Error cargando el panel: " + (e?.message || e), "error", 6000);
+  } finally { setLoading(false); }
+}
+
+/** Determina el rol del usuario; null si no está autorizado. */
+async function determineRole(user) {
+  const email = String(user?.email || "").trim().toLowerCase();
+  if (isAdminEmail(email)) return "admin";
+  try {
+    const u = await DB.getUsuario(email);
+    return u ? (u.role || "lector") : null;
+  } catch (_) {
+    return null; // permiso denegado = no autorizado
   }
 }
 
-loginForm?.addEventListener("submit", handleEmailLogin);
-btnGoogle?.addEventListener("click", handleGoogleLogin);
+/** Ajusta la interfaz según el rol (oculta secciones de admin y marca solo-lectura). */
+function applyRoleUI() {
+  const admin = isAdmin();
+  $$(".admin-only").forEach((el) => { el.style.display = admin ? "" : "none"; });
+  let badge = $("#roleBadge");
+  if (!admin) {
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.id = "roleBadge";
+      badge.className = "pill gray";
+      badge.textContent = "Solo lectura";
+      $(".sidebar-foot")?.prepend(badge);
+    }
+  } else if (badge) { badge.remove(); }
+}
 
-btnLogout?.addEventListener("click", async () => {
-  setLoading(true, "Cerrando sesión…");
+/* -------- Nav wiring -------- */
+$$(".nav-item").forEach((b) => b.onclick = () => navigate(b.dataset.view));
+$("#btnMenu")?.addEventListener("click", () => $("#sidebar").classList.toggle("open"));
 
+/* =========================================================
+   AUTH
+========================================================= */
+function showAuth(msg = "") {
+  authView.hidden = false; appView.hidden = true;
+  $("#authMsg").textContent = msg || "";
+  setLoading(false);
+}
+function showApp(user) {
+  authView.hidden = true; appView.hidden = false;
+  $("#sessionEmail").textContent = user?.email || "—";
+  setLoading(false);
+}
+
+$("#loginForm")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = $("#loginEmail").value.trim();
+  const pass = $("#loginPass").value;
+  if (!email || !pass) { $("#authMsg").textContent = "Completa correo y contraseña."; return; }
+  setLoading(true, "Ingresando…");
+  try { await signInWithEmailAndPassword(auth, email, pass); }
+  catch (err) { setLoading(false); $("#authMsg").textContent = prettyAuthError?.(err) || "No se pudo ingresar."; }
+});
+$("#btnGoogle")?.addEventListener("click", async () => {
+  setLoading(true, "Abriendo Google…");
   try {
-    await signOut(auth);
-    resetProtectedUI();
-  } catch (e) {
-    console.error(e);
-    toast("No pude cerrar sesión.", "error");
-  } finally {
-    setLoading(false);
-  }
+    const res = await signInWithGoogle({ preferRedirect: /Android|iPhone|iPad/i.test(navigator.userAgent) });
+    if (!res?.ok) throw res?.error || new Error(res?.message);
+  } catch (err) { setLoading(false); $("#authMsg").textContent = prettyAuthError?.(err) || err?.message || "Error con Google."; }
+});
+$("#btnLogout")?.addEventListener("click", async () => {
+  setLoading(true, "Cerrando sesión…");
+  try { await signOut(auth); state.booted = false; } finally { setLoading(false); }
 });
 
-async function initAuthFlow() {
+async function init() {
   showAuth("");
-
-  try {
-    const redirectInfo = await consumeRedirectResult();
-    if (!redirectInfo?.ok && redirectInfo?.message) {
-      console.warn("Redirect result:", redirectInfo.message);
-    }
-  } catch (err) {
-    console.warn("consumeRedirectResult falló:", err);
-  }
-
+  try { await consumeRedirectResult(); } catch (_) {}
   onAuthStateChanged(auth, async (user) => {
-    if (user) {
-      showApp(user);
-      await bootApp();
-    } else {
-      resetProtectedUI();
-      showAuth("");
+    if (!user) { showAuth(""); return; }
+    setLoading(true, "Verificando acceso…");
+    const role = await determineRole(user);
+    if (!role) {
+      await signOut(auth).catch(() => {});
+      showAuth("Tu correo no tiene acceso a este panel. Pídele a un administrador que te agregue.");
+      return;
     }
+    state.role = role;
+    state.user = user;
+    showApp(user);
+    applyRoleUI();
+    await bootApp();
   });
 }
 
-/* -------- Start -------- */
-console.log(`[FESICOL] app.js build ${BUILD}`);
-initAuthFlow();
+console.log("[FESICOL] Panel Firestore · build 2026-06-16");
+init();

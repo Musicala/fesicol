@@ -21,6 +21,8 @@ import {
   signInWithRedirect,
   getRedirectResult
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
+import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+import { getStorage } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-storage.js";
 
 /* =========================================================
    Singleton interno del módulo
@@ -121,6 +123,10 @@ export function initFirebase(firebaseConfig, options = {}) {
   // App singleton segura
   const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
   const auth = getAuth(app);
+
+  // Firestore + Storage (base de datos y archivos del convenio)
+  const db = getFirestore(app);
+  const storage = getStorage(app);
 
   /* =======================================================
      Persistencia
@@ -332,6 +338,8 @@ export function initFirebase(firebaseConfig, options = {}) {
   __firebaseInstance = {
     app,
     auth,
+    db,
+    storage,
 
     // Eventos
     onAuthStateChanged,
