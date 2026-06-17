@@ -161,6 +161,67 @@ export async function deleteEstudiante(id) {
   await deleteDoc(doc(_db, "estudiantes", id));
 }
 
+/**
+ * Fusiona varios estudiantes duplicados en uno solo.
+ * Reasigna todas las inscripciones de los duplicados al estudiante principal
+ * y elimina los duplicados. Devuelve cuántas inscripciones se movieron.
+ */
+export async function mergeEstudiantes(keepId, dropIds = []) {
+  const dups = dropIds.filter((id) => id && id !== keepId);
+  if (!dups.length) return { movidas: 0, eliminados: 0 };
+
+  const keepSnap = await getDoc(doc(_db, "estudiantes", keepId));
+  const keepData = keepSnap.exists() ? keepSnap.data() : {};
+  const keepNombre = keepData.nombre || "";
+
+  // Une asociados sin duplicar (por documento, o por nombre si no hay documento)
+  const asocsDe = (d) => {
+    if (Array.isArray(d?.asociados) && d.asociados.length) return d.asociados;
+    if (d?.asociadoNombre || d?.asociadoDocumento)
+      return [{ nombre: d.asociadoNombre || "", documento: d.asociadoDocumento || "", telefono: d.telefono || "", parentesco: d.parentesco || "" }];
+    return [];
+  };
+  const vistos = new Set(); const asociados = [];
+  const acumula = (arr) => arr.forEach((a) => {
+    if (!a || (!a.documento && !a.nombre)) return;
+    const k = a.documento ? "d:" + String(a.documento).trim() : "n:" + String(a.nombre).trim().toLowerCase();
+    if (vistos.has(k)) return; vistos.add(k); asociados.push(a);
+  });
+  acumula(asocsDe(keepData));
+
+  const batch = writeBatch(_db);
+  let movidas = 0;
+
+  for (const dupId of dups) {
+    const dupSnap = await getDoc(doc(_db, "estudiantes", dupId));
+    if (dupSnap.exists()) acumula(asocsDe(dupSnap.data()));
+    const qs = await getDocs(
+      query(col("inscripciones"), where("estudianteId", "==", dupId))
+    );
+    qs.forEach((d) => {
+      batch.update(doc(_db, "inscripciones", d.id), {
+        estudianteId: keepId,
+        estudianteNombre: keepNombre,
+        updatedAt: serverTimestamp()
+      });
+      movidas++;
+    });
+    batch.delete(doc(_db, "estudiantes", dupId));
+  }
+
+  // Guarda el conjunto unido de asociados en el estudiante conservado
+  const principal = asociados[0] || {};
+  batch.set(doc(_db, "estudiantes", keepId), {
+    asociados,
+    asociadoNombre: principal.nombre || keepData.asociadoNombre || "",
+    asociadoDocumento: principal.documento || keepData.asociadoDocumento || "",
+    updatedAt: serverTimestamp()
+  }, { merge: true });
+
+  await batch.commit();
+  return { movidas, eliminados: dups.length };
+}
+
 /* =========================================================
    INSCRIPCIONES  (estudiante + ciclo + precio)
 ========================================================= */
@@ -330,6 +391,12 @@ export async function importPlanilla(items, planillaMeta = {}) {
   const batch = writeBatch(_db);
   let nuevosEst = 0, nuevasIns = 0;
 
+  // Mismo inscrito puede venir en varias filas (p. ej. con papá y mamá como
+  // asociados, cada uno adquiriendo un servicio). Reutilizamos el mismo
+  // estudiante dentro del lote para no crear duplicados.
+  const normNombre = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const nuevosPorNombre = new Map();
+
   items.forEach((it) => {
     // Asociado (id = documento)
     if (it.asociado?.documento) {
@@ -337,13 +404,28 @@ export async function importPlanilla(items, planillaMeta = {}) {
       batch.set(aRef, { ...it.asociado, updatedAt: serverTimestamp() }, { merge: true });
     }
 
-    // Estudiante: reutiliza si ya existe, si no, crea
+    // Estudiante: reutiliza si ya existe (en BD o en este mismo lote), si no, crea
     let estId = it.estudianteId;
+    const clave = normNombre(it.estudiante?.nombre);
+    if (!estId && clave && nuevosPorNombre.has(clave)) {
+      estId = nuevosPorNombre.get(clave);
+    }
     if (!estId) {
       const eRef = doc(col("estudiantes"));
       estId = eRef.id;
       batch.set(eRef, { ...it.estudiante, activo: true, createdAt: serverTimestamp() });
+      if (clave) nuevosPorNombre.set(clave, estId);
       nuevosEst++;
+    } else if (it.estudianteId && Array.isArray(it.estudiante?.asociados)) {
+      // Estudiante ya existente: conecta los asociados de esta planilla (unión ya calculada).
+      batch.set(doc(_db, "estudiantes", estId), {
+        asociados: it.estudiante.asociados,
+        asociadoNombre: it.estudiante.asociadoNombre || "",
+        asociadoDocumento: it.estudiante.asociadoDocumento || "",
+        telefono: it.estudiante.telefono || "",
+        parentesco: it.estudiante.parentesco || "",
+        updatedAt: serverTimestamp()
+      }, { merge: true });
     }
 
     // Inscripción (si se pidió crear)

@@ -193,6 +193,30 @@ function estudianteNombre(id) {
   return state.estudiantes.find((e) => e.id === id)?.nombre || "—";
 }
 
+/** Lista de asociados de un estudiante (compatible con el modelo viejo de un solo asociado). */
+function asociadosDe(est) {
+  if (Array.isArray(est?.asociados) && est.asociados.length) return est.asociados;
+  if (est?.asociadoNombre || est?.asociadoDocumento) {
+    return [{
+      nombre: est.asociadoNombre || "", documento: est.asociadoDocumento || "",
+      telefono: est.telefono || "", parentesco: est.parentesco || ""
+    }];
+  }
+  return [];
+}
+
+/** Une asociados sin duplicar (por documento, o por nombre si no hay documento). */
+function unirAsociados(...listas) {
+  const out = []; const vistos = new Set();
+  listas.flat().forEach((a) => {
+    if (!a || (!a.documento && !a.nombre)) return;
+    const clave = a.documento ? "d:" + String(a.documento).trim() : "n:" + String(a.nombre).trim().toLowerCase();
+    if (vistos.has(clave)) return;
+    vistos.add(clave); out.push(a);
+  });
+  return out;
+}
+
 /* =========================================================
    ROUTER
 ========================================================= */
@@ -379,23 +403,37 @@ function formCiclo(c = null) {
 
 /* ---------- ESTUDIANTES ---------- */
 async function renderEstudiantes() {
-  $("#topbarActions").innerHTML = `<input id="qEst" class="search" placeholder="Buscar…"><button class="btn secondary sm" id="expEst">⬇ Excel</button>` + adminOnly(`<button class="btn primary sm" id="addEst">+ Estudiante</button>`);
+  $("#topbarActions").innerHTML = `<input id="qEst" class="search" placeholder="Buscar…"><button class="btn secondary sm" id="expEst">⬇ Excel</button>` + adminOnly(`<button class="btn secondary sm" id="mergeEst">⛓ Fusionar duplicados</button><button class="btn primary sm" id="addEst">+ Estudiante</button>`);
   $("#addEst") && ($("#addEst").onclick = () => formEstudiante());
-  $("#expEst").onclick = () => exportToExcel(state.estudiantes.map((e) => ({
-    Estudiante: e.nombre, Edad: e.edad ?? "", Asociado: e.asociadoNombre ?? "", "Documento asociado": e.asociadoDocumento ?? "",
-    Parentesco: e.parentesco ?? "", Telefono: e.telefono ?? "", Estado: e.activo === false ? "inactivo" : "activo",
-    Inscripciones: state.inscripciones.filter((i) => i.estudianteId === e.id).length
-  })), "estudiantes-fesicol.xlsx", "Estudiantes");
+  $("#mergeEst") && ($("#mergeEst").onclick = () => fusionarDuplicados());
+  $("#expEst").onclick = () => exportToExcel(state.estudiantes.map((e) => {
+    const asocs = asociadosDe(e);
+    return {
+      Estudiante: e.nombre, Edad: e.edad ?? "",
+      Asociados: asocs.map((a) => a.nombre).filter(Boolean).join(" / "),
+      "Documentos asociados": asocs.map((a) => a.documento).filter(Boolean).join(" / "),
+      Parentesco: asocs.map((a) => a.parentesco).filter(Boolean).join(" / "),
+      Telefono: asocs.map((a) => a.telefono).filter(Boolean).join(" / "),
+      Estado: e.activo === false ? "inactivo" : "activo",
+      Inscripciones: state.inscripciones.filter((i) => i.estudianteId === e.id).length
+    };
+  }), "estudiantes-fesicol.xlsx", "Estudiantes");
 
   const draw = (q = "") => {
-    const list = state.estudiantes.filter((e) => !q || (e.nombre || "").toLowerCase().includes(q) || (e.asociadoNombre || "").toLowerCase().includes(q));
+    const list = state.estudiantes.filter((e) => !q || (e.nombre || "").toLowerCase().includes(q) || asociadosDe(e).some((a) => (a.nombre || "").toLowerCase().includes(q)));
     const rows = list.map((e) => {
       const insN = state.inscripciones.filter((i) => i.estudianteId === e.id).length;
+      const asocs = asociadosDe(e);
+      const asocCell = asocs.length
+        ? asocs.map((a) => `${esc(a.nombre || "—")}${a.parentesco ? ` <span class="muted">(${esc(a.parentesco)})</span>` : ""}`).join("<br>")
+        : "—";
+      const parentCell = asocs.length ? asocs.map((a) => esc(a.parentesco || "—")).join("<br>") : "—";
+      const telCell = asocs.length ? asocs.map((a) => esc(a.telefono || "—")).join("<br>") : "—";
       return `<tr>
         <td><strong>${esc(e.nombre)}</strong></td>
-        <td>${esc(e.asociadoNombre || "—")}</td>
-        <td>${esc(e.parentesco || "—")}</td>
-        <td>${esc(e.telefono || "—")}</td>
+        <td>${asocCell}</td>
+        <td>${parentCell}</td>
+        <td>${telCell}</td>
         <td>${insN}</td>
         <td><span class="pill ${e.activo === false ? "gray" : "green"}">${e.activo === false ? "inactivo" : "activo"}</span></td>
         <td class="row-actions">
@@ -418,20 +456,100 @@ async function renderEstudiantes() {
   $("#qEst").oninput = (e) => draw(e.target.value.trim().toLowerCase());
 }
 
+/* ---------- FUSIONAR DUPLICADOS ---------- */
+/** Agrupa estudiantes con nombres parecidos (posibles duplicados). */
+function detectarGruposDuplicados() {
+  const ests = state.estudiantes.slice();
+  const usados = new Set();
+  const grupos = [];
+  for (let i = 0; i < ests.length; i++) {
+    if (usados.has(ests[i].id)) continue;
+    const grupo = [ests[i]];
+    for (let j = i + 1; j < ests.length; j++) {
+      if (usados.has(ests[j].id)) continue;
+      if (nombresCoinciden(ests[i].nombre, ests[j].nombre)) {
+        grupo.push(ests[j]); usados.add(ests[j].id);
+      }
+    }
+    if (grupo.length > 1) { usados.add(ests[i].id); grupos.push(grupo); }
+  }
+  return grupos;
+}
+
+async function fusionarDuplicados() {
+  const grupos = detectarGruposDuplicados();
+  if (!grupos.length) {
+    openModal("Fusionar duplicados", `<div class="alert ok">No se detectaron estudiantes duplicados ✅</div>`);
+    return;
+  }
+  const insN = (id) => state.inscripciones.filter((x) => x.estudianteId === id).length;
+  const bloques = grupos.map((g, gi) => {
+    // sugiere conservar el que más inscripciones tenga
+    const principalId = g.slice().sort((a, b) => insN(b.id) - insN(a.id))[0].id;
+    const filas = g.map((e) => `
+      <label class="merge-row" style="display:flex;gap:.5rem;align-items:center;padding:.3rem 0">
+        <input type="radio" name="keep-${gi}" value="${e.id}" ${e.id === principalId ? "checked" : ""}>
+        <span><strong>${esc(e.nombre)}</strong> · ${esc(asociadosDe(e).map((a) => a.nombre).filter(Boolean).join(", ") || "sin asociado")} · ${insN(e.id)} inscrip.</span>
+      </label>`).join("");
+    return `<div class="panel" data-grupo="${gi}" style="margin-bottom:.75rem;padding:.75rem">
+      <div class="muted" style="margin-bottom:.35rem">Posible duplicado (${g.length}). Marca cuál conservar:</div>
+      ${filas}
+      <button class="btn primary sm" data-merge-grupo="${gi}">Fusionar este grupo</button>
+    </div>`;
+  }).join("");
+
+  openModal("Fusionar duplicados", `
+    <p class="muted">Las inscripciones de los duplicados se reasignan al estudiante que conserves; los demás se eliminan. Esto no se puede deshacer.</p>
+    ${bloques}`);
+
+  // guarda referencia a los grupos para el handler
+  const _grupos = grupos;
+  document.querySelectorAll("[data-merge-grupo]").forEach((btn) => {
+    btn.onclick = async () => {
+      const gi = Number(btn.dataset.mergeGrupo);
+      const sel = document.querySelector(`input[name="keep-${gi}"]:checked`);
+      if (!sel) { toast("Selecciona cuál conservar.", "info"); return; }
+      const keepId = sel.value;
+      const dropIds = _grupos[gi].map((e) => e.id).filter((id) => id !== keepId);
+      if (!confirm(`Se fusionarán ${dropIds.length} estudiante(s) en uno. ¿Continuar?`)) return;
+      try {
+        setLoading(true);
+        const res = await DB.mergeEstudiantes(keepId, dropIds);
+        toast(`Fusionado: ${res.movidas} inscripción(es) movidas, ${res.eliminados} eliminado(s) ✅`, "success", 5000);
+        closeModal();
+        await refresh();
+        fusionarDuplicados();
+      } catch (err) {
+        console.error(err); toast("Error al fusionar: " + (err?.message || err), "error", 6000);
+      } finally { setLoading(false); }
+    };
+  });
+}
+
 function formEstudiante(s = null) {
+  const asocsIniciales = asociadosDe(s);
+  if (!asocsIniciales.length) asocsIniciales.push({});
+  const filaAsoc = (a = {}) => `
+    <div class="asoc-row panel" style="padding:.6rem;margin-bottom:.5rem">
+      <div class="grid-2">
+        <label class="field"><span>Nombre del asociado</span><input class="a-nombre" value="${esc(a.nombre || "")}"></label>
+        <label class="field"><span>Documento asociado</span><input class="a-doc" value="${esc(a.documento || "")}"></label>
+      </div>
+      <div class="grid-2">
+        <label class="field"><span>Parentesco</span><input class="a-parentesco" placeholder="Papá, Mamá, cónyuge…" value="${esc(a.parentesco || "")}"></label>
+        <label class="field"><span>Teléfono</span><input class="a-tel" value="${esc(a.telefono || "")}"></label>
+      </div>
+      <button type="button" class="link-btn danger a-del">Quitar asociado</button>
+    </div>`;
   openModal(s ? "Editar estudiante" : "Nuevo estudiante", `
     <form id="f" class="form">
       <div class="grid-2">
         <label class="field"><span>Nombre del inscrito</span><input name="nombre" value="${esc(s?.nombre || "")}" required></label>
         <label class="field"><span>Edad</span><input name="edad" type="number" value="${esc(s?.edad || "")}"></label>
       </div>
-      <div class="grid-2">
-        <label class="field"><span>Nombre del asociado</span><input name="asociadoNombre" value="${esc(s?.asociadoNombre || "")}"></label>
-        <label class="field"><span>Documento asociado</span><input name="asociadoDocumento" value="${esc(s?.asociadoDocumento || "")}"></label>
-      </div>
-      <div class="grid-2">
-        <label class="field"><span>Parentesco</span><input name="parentesco" placeholder="Hijo/a, cónyuge… (vacío si es el asociado)" value="${esc(s?.parentesco || "")}"></label>
-        <label class="field"><span>Teléfono</span><input name="telefono" value="${esc(s?.telefono || "")}"></label>
+      <div class="field"><span>Asociados (quién(es) lo inscriben)</span>
+        <div id="asocList">${asocsIniciales.map(filaAsoc).join("")}</div>
+        <button type="button" class="btn secondary sm" id="addAsoc">+ Agregar asociado</button>
       </div>
       <label class="field"><span>Estado</span>
         <select name="activo">
@@ -441,11 +559,29 @@ function formEstudiante(s = null) {
       </label>
       <div class="form-row"><button class="btn primary" type="submit">Guardar</button></div>
     </form>`);
+  const bindDel = () => $("#asocList").querySelectorAll(".a-del").forEach((b) => b.onclick = () => {
+    if ($("#asocList").querySelectorAll(".asoc-row").length > 1) b.closest(".asoc-row").remove();
+    else toast("Debe quedar al menos un asociado (puede dejarse vacío).", "info");
+  });
+  bindDel();
+  $("#addAsoc").onclick = () => { $("#asocList").insertAdjacentHTML("beforeend", filaAsoc()); bindDel(); };
   $("#f").onsubmit = async (e) => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
     fd.activo = fd.activo === "true";
     fd.edad = fd.edad ? Number(fd.edad) : null;
+    const asociados = unirAsociados([...$("#asocList").querySelectorAll(".asoc-row")].map((row) => ({
+      nombre: row.querySelector(".a-nombre").value.trim(),
+      documento: row.querySelector(".a-doc").value.trim(),
+      parentesco: row.querySelector(".a-parentesco").value.trim(),
+      telefono: row.querySelector(".a-tel").value.trim()
+    })).filter((a) => a.nombre || a.documento));
+    const principal = asociados[0] || {};
+    fd.asociados = asociados;
+    fd.asociadoNombre = principal.nombre || "";
+    fd.asociadoDocumento = principal.documento || "";
+    fd.parentesco = principal.parentesco || "";
+    fd.telefono = principal.telefono || "";
     await DB.saveEstudiante(fd, s?.id || null);
     closeModal(); await refresh();
     toast("Estudiante guardado ✅", "success");
@@ -455,11 +591,20 @@ function formEstudiante(s = null) {
 async function verHistorial(estId) {
   const est = state.estudiantes.find((e) => e.id === estId);
   const ins = state.inscripciones.filter((i) => i.estudianteId === estId);
-  const rows = ins.map((i) => `<tr><td>${esc(cicloNombre(i.cicloId))}</td><td>${esc(i.mes || "—")}</td><td>${esc(i.modalidad || "—")}</td><td>${esc(i.duracion || "—")}</td><td>${formatCOP(i.precio)}</td><td>${esc(i.estado || "—")}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Sin inscripciones registradas.</td></tr>`;
+  const asocs = asociadosDe(est);
+  const asocBox = asocs.length ? `
+    <div class="panel" style="padding:.6rem .8rem;margin-bottom:12px">
+      <strong>Asociados que inscriben a ${esc(est?.nombre || "")}:</strong>
+      <ul style="margin:.4rem 0 0;padding-left:1.1rem">
+        ${asocs.map((a) => `<li>${esc(a.nombre || "—")}${a.parentesco ? ` — ${esc(a.parentesco)}` : ""}${a.documento ? ` <span class="muted">(doc. ${esc(a.documento)})</span>` : ""}</li>`).join("")}
+      </ul>
+    </div>` : "";
+  const rows = ins.map((i) => `<tr><td>${esc(cicloNombre(i.cicloId))}</td><td>${esc(i.mes || "—")}</td><td>${esc(i.servicio || i.modalidad || "—")}</td><td>${esc(i.asociadoNombre || "—")}</td><td>${formatCOP(i.precio)}</td><td>${esc(i.estado || "—")}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Sin inscripciones registradas.</td></tr>`;
   const total = ins.reduce((a, b) => a + (b.precio || 0), 0);
   openModal(`Historial · ${est?.nombre || ""}`, `
-    <table class="data-table"><thead><tr><th>Ciclo</th><th>Mes</th><th>Modalidad</th><th>Duración</th><th>Precio</th><th>Estado</th></tr></thead><tbody>${rows}</tbody></table>
-    <p style="margin-top:12px"><strong>Total facturado a este estudiante:</strong> ${formatCOP(total)}</p>`);
+    ${asocBox}
+    <table class="data-table"><thead><tr><th>Ciclo</th><th>Mes</th><th>Servicio</th><th>Solicitado por</th><th>Precio</th><th>Estado</th></tr></thead><tbody>${rows}</tbody></table>
+    <p style="margin-top:12px"><strong>Total del plan de ${esc(est?.nombre || "este estudiante")}:</strong> ${formatCOP(total)} <span class="muted">· ${ins.length} servicio(s) sumados de todos sus asociados</span></p>`);
 }
 
 /* ---------- INSCRIPCIONES ---------- */
@@ -467,12 +612,13 @@ async function renderInscripciones() {
   $("#topbarActions").innerHTML = `<button class="btn secondary sm" id="expIns">⬇ Excel</button>` + adminOnly(`<button class="btn primary sm" id="addIns">+ Inscripción</button>`);
   $("#addIns") && ($("#addIns").onclick = () => formInscripcion());
   $("#expIns").onclick = () => exportToExcel(state.inscripciones.map((i) => ({
-    Estudiante: estudianteNombre(i.estudianteId) || i.estudianteNombre || "", Ciclo: cicloNombre(i.cicloId), Mes: i.mes ?? "",
+    Estudiante: estudianteNombre(i.estudianteId) || i.estudianteNombre || "", "Solicitado por": i.asociadoNombre ?? "", Ciclo: cicloNombre(i.cicloId), Mes: i.mes ?? "",
     Servicio: i.servicio ?? "", Modalidad: i.modalidad ?? "", Duracion: i.duracion ?? "", Precio: i.precio ?? 0, Estado: i.estado ?? ""
   })), "inscripciones-fesicol.xlsx", "Inscripciones");
 
   const rows = state.inscripciones.map((i) => `<tr>
       <td><strong>${esc(estudianteNombre(i.estudianteId) || i.estudianteNombre || "—")}</strong></td>
+      <td>${esc(i.asociadoNombre || "—")}</td>
       <td>${esc(cicloNombre(i.cicloId))}</td>
       <td>${esc(i.mes || "—")}</td>
       <td>${esc(i.modalidad || "—")}</td>
@@ -482,10 +628,10 @@ async function renderInscripciones() {
       <td class="row-actions">${adminOnly(`
         <button class="link-btn" data-edit="${i.id}">Editar</button>
         <button class="link-btn danger" data-del="${i.id}">Eliminar</button>`)}
-      </td></tr>`).join("") || `<tr><td colspan="8" class="muted">Sin inscripciones.</td></tr>`;
+      </td></tr>`).join("") || `<tr><td colspan="9" class="muted">Sin inscripciones.</td></tr>`;
 
   content.innerHTML = `<section class="panel"><table class="data-table">
-    <thead><tr><th>Estudiante</th><th>Ciclo</th><th>Mes</th><th>Modalidad</th><th>Duración</th><th>Precio</th><th>Estado</th><th></th></tr></thead>
+    <thead><tr><th>Estudiante</th><th>Solicitado por</th><th>Ciclo</th><th>Mes</th><th>Modalidad</th><th>Duración</th><th>Precio</th><th>Estado</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table></section>`;
   content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => formInscripcion(state.inscripciones.find((x) => x.id === b.dataset.edit)));
   content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
@@ -508,6 +654,7 @@ function formInscripcion(i = null) {
         <label class="field"><span>Mes</span><input name="mes" type="month" value="${esc(i?.mes || monthISO())}"></label>
         <label class="field"><span>Servicio / Tarifa</span><select name="servicio" id="servSel"><option value="">Selecciona…</option>${tarifaOpts}</select></label>
       </div>
+      <label class="field"><span>Solicitado por (asociado)</span><select name="asociadoDocumento" id="asocSel"><option value="">—</option></select></label>
       <div class="grid-2">
         <label class="field"><span>Modalidad</span><input name="modalidad" value="${esc(i?.modalidad || "")}"></label>
         <label class="field"><span>Duración</span><input name="duracion" value="${esc(i?.duracion || "")}"></label>
@@ -531,11 +678,24 @@ function formInscripcion(i = null) {
       if (!f.modalidad.value) f.modalidad.value = serv.split(" Paquete")[0].split(" 1 mes")[0];
     }
   };
+  // Pobla "Solicitado por" con los asociados del estudiante seleccionado
+  const estSel = $("#f").estudianteId;
+  const asocSel = $("#asocSel");
+  const llenarAsoc = () => {
+    const est = state.estudiantes.find((e) => e.id === estSel.value);
+    const asocs = asociadosDe(est);
+    asocSel.innerHTML = `<option value="">—</option>` + asocs.map((a) =>
+      `<option value="${esc(a.documento || a.nombre)}" data-nombre="${esc(a.nombre || "")}" ${(i?.asociadoDocumento && i.asociadoDocumento === a.documento) || (i?.asociadoNombre && i.asociadoNombre === a.nombre) ? "selected" : ""}>${esc(a.nombre || "—")}${a.parentesco ? ` (${esc(a.parentesco)})` : ""}</option>`
+    ).join("");
+  };
+  estSel.onchange = llenarAsoc;
+  llenarAsoc();
   $("#f").onsubmit = async (e) => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
     fd.precio = parsePrice(fd.precio);
     fd.estudianteNombre = estudianteNombre(fd.estudianteId);
+    fd.asociadoNombre = asocSel.selectedOptions[0]?.dataset.nombre || "";
     await DB.saveInscripcion(fd, i?.id || null);
     closeModal(); await refresh();
     toast("Inscripción guardada ✅", "success");
@@ -696,7 +856,45 @@ function formUsuario() {
 }
 
 /* ---------- IMPORTAR PLANILLA (Fase 2) ---------- */
-const norm = (s) => String(s ?? "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+const norm = (s) => String(s ?? "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ");
+
+/* ---------- Coincidencia difusa de nombres ----------
+   Reconoce que dos nombres son el mismo estudiante aunque difieran en
+   mayúsculas, tildes, espacios de más, orden de palabras o un pequeño typo. */
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    let cur = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+/** Devuelve true si dos nombres son muy probablemente la misma persona. */
+function nombresCoinciden(a, b) {
+  const na = norm(a), nb = norm(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  // mismo conjunto de palabras en cualquier orden (incluye nombres reordenados)
+  const sa = na.split(" ").filter(Boolean).sort().join(" ");
+  const sb = nb.split(" ").filter(Boolean).sort().join(" ");
+  if (sa === sb) return true;
+  // tolerancia a typos: distancia de edición pequeña según longitud
+  const maxLen = Math.max(sa.length, sb.length);
+  const tol = maxLen > 14 ? 3 : maxLen > 8 ? 2 : 1;
+  return levenshtein(sa, sb) <= tol;
+}
+
+/** Busca en la lista un estudiante cuyo nombre coincida (difuso). */
+function findEstudianteSimilar(nombre, list = state.estudiantes) {
+  return list.find((e) => nombresCoinciden(e.nombre, nombre)) || null;
+}
 
 /** Busca el precio en tarifas combinando modalidad + duración. */
 function matchTarifa(modalidad, duracion) {
@@ -783,8 +981,8 @@ function parsePlanillaRows(rows, file) {
     const modalidad = String(r[idx.modalidad] ?? "").trim();
     const duracion = String(r[idx.duracion] ?? "").trim();
     const tar = matchTarifa(modalidad, duracion);
-    // ¿estudiante ya existe? (por nombre)
-    const existente = state.estudiantes.find((e) => norm(e.nombre) === norm(nombre));
+    // ¿estudiante ya existe? (coincidencia difusa: tildes, mayúsculas, espacios, typos)
+    const existente = findEstudianteSimilar(nombre);
     out.push({
       nombre,
       edad: r[idx.edad] || "",
@@ -846,25 +1044,45 @@ async function confirmImportPlanilla() {
     let archivo = {};
     try { archivo = await DB.uploadArchivo(data.file, "planillas"); } catch (_) {}
 
-    const items = data.rows.map((r) => {
-      const it = {
-        estudianteId: r.existenteId || null,
-        estudiante: {
-          nombre: r.nombre, edad: r.edad ? Number(r.edad) : null,
-          asociadoNombre: r.asociadoNombre, asociadoDocumento: r.asociadoDocumento,
-          telefono: r.telefono, parentesco: r.parentesco
-        },
-        asociado: r.asociadoDocumento ? {
-          documento: r.asociadoDocumento, nombre: r.asociadoNombre, telefono: r.telefono
-        } : null
+    // Agrupa las filas por estudiante destino (existente o nuevo) para conectar
+    // varios asociados (papá, mamá…) al mismo Juan Esteban y sumar sus servicios.
+    const asocDeFila = (r) => (r.asociadoNombre || r.asociadoDocumento)
+      ? { documento: r.asociadoDocumento, nombre: r.asociadoNombre, telefono: r.telefono, parentesco: r.parentesco }
+      : null;
+    const grupos = [];
+    data.rows.forEach((r) => {
+      let g = r.existenteId
+        ? grupos.find((x) => x.existenteId === r.existenteId)
+        : grupos.find((x) => !x.existenteId && nombresCoinciden(x.base.nombre, r.nombre));
+      if (!g) { g = { existenteId: r.existenteId || null, base: r, rows: [] }; grupos.push(g); }
+      g.rows.push(r);
+    });
+
+    const items = [];
+    grupos.forEach((g) => {
+      const existente = g.existenteId ? state.estudiantes.find((e) => e.id === g.existenteId) : null;
+      const asociados = unirAsociados(
+        existente ? asociadosDe(existente) : [],
+        g.rows.map(asocDeFila).filter(Boolean)
+      );
+      const principal = asociados[0] || {};
+      const estudiante = {
+        nombre: g.base.nombre, edad: g.base.edad ? Number(g.base.edad) : null,
+        asociados,
+        asociadoNombre: principal.nombre || "", asociadoDocumento: principal.documento || "",
+        telefono: principal.telefono || "", parentesco: principal.parentesco || ""
       };
-      if (cicloId) {
-        it.inscripcion = {
-          cicloId, mes, modalidad: r.modalidad, duracion: r.duracion,
-          servicio: r.servicio, precio: r.precio
-        };
-      }
-      return it;
+      g.rows.forEach((r) => {
+        const it = { estudianteId: g.existenteId || null, estudiante, asociado: asocDeFila(r) };
+        if (cicloId) {
+          it.inscripcion = {
+            cicloId, mes, modalidad: r.modalidad, duracion: r.duracion,
+            servicio: r.servicio, precio: r.precio,
+            asociadoNombre: r.asociadoNombre || "", asociadoDocumento: r.asociadoDocumento || ""
+          };
+        }
+        items.push(it);
+      });
     });
 
     const res = await DB.importPlanilla(items, {
