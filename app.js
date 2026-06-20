@@ -786,16 +786,59 @@ function formFactura(f = null) {
 }
 
 /* ---------- TARIFAS ---------- */
+function tarifaCategoria(servicio) {
+  return (servicio || "").trim().split(/\s+/)[0] || "Otros";
+}
+
 async function renderTarifas() {
   $("#topbarActions").innerHTML = `<input id="qTar" class="search" placeholder="Buscar servicio…">`;
-  const draw = (q = "") => {
-    const list = state.tarifas.filter((t) => !q || (t.servicio || "").toLowerCase().includes(q));
-    const rows = list.map((t) => `<tr><td>${esc(t.servicio)}</td><td>${formatCOP(t.precio)}</td></tr>`).join("") || `<tr><td colspan="2" class="muted">Sin resultados.</td></tr>`;
-    content.innerHTML = `<section class="panel"><p class="muted sm">Música, danza, teatro y artes plásticas. Tarifas 2026 del convenio.</p>
-      <table class="data-table"><thead><tr><th>Servicio</th><th>Precio</th></tr></thead><tbody>${rows}</tbody></table></section>`;
-    $("#qTar").oninput = (e) => draw(e.target.value.trim().toLowerCase());
-    $("#qTar").value = q;
-    if (q) $("#qTar").focus();
+
+  // estado local del buscador/orden/filtro
+  const ui = { q: "", cat: "", sort: "servicio", dir: 1 };
+
+  const categorias = [...new Set(state.tarifas.map((t) => tarifaCategoria(t.servicio)))].sort((a, b) => a.localeCompare(b, "es"));
+
+  const draw = () => {
+    let list = state.tarifas.filter((t) => {
+      const okQ = !ui.q || (t.servicio || "").toLowerCase().includes(ui.q);
+      const okCat = !ui.cat || tarifaCategoria(t.servicio) === ui.cat;
+      return okQ && okCat;
+    });
+    list.sort((a, b) => {
+      if (ui.sort === "precio") return ((a.precio || 0) - (b.precio || 0)) * ui.dir;
+      return (a.servicio || "").localeCompare(b.servicio || "", "es") * ui.dir;
+    });
+
+    const ind = (col) => (ui.sort === col ? (ui.dir === 1 ? " ▲" : " ▼") : "");
+    const rows = list.map((t) =>
+      `<tr><td>${esc(t.servicio)}</td><td>${formatCOP(t.precio)}</td></tr>`
+    ).join("") || `<tr><td colspan="2" class="muted">Sin resultados.</td></tr>`;
+
+    const opts = `<option value="">Todas las categorías</option>` +
+      categorias.map((c) => `<option value="${esc(c)}" ${ui.cat === c ? "selected" : ""}>${esc(c)}</option>`).join("");
+
+    content.innerHTML = `<section class="panel">
+      <p class="muted sm">Música, danza, teatro y artes plásticas. Tarifas 2026 del convenio.</p>
+      <div class="toolbar" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <select id="catTar" class="search">${opts}</select>
+        <span class="muted sm">${list.length} de ${state.tarifas.length} servicios</span>
+      </div>
+      <table class="data-table"><thead><tr>
+        <th class="sortable" data-sort="servicio" style="cursor:pointer">Servicio${ind("servicio")}</th>
+        <th class="sortable" data-sort="precio" style="cursor:pointer">Precio${ind("precio")}</th>
+      </tr></thead><tbody>${rows}</tbody></table></section>`;
+
+    $("#qTar").oninput = (e) => { ui.q = e.target.value.trim().toLowerCase(); draw(); };
+    $("#qTar").value = ui.q;
+    $("#catTar").onchange = (e) => { ui.cat = e.target.value; draw(); };
+    content.querySelectorAll("th.sortable").forEach((th) => {
+      th.onclick = () => {
+        const col = th.dataset.sort;
+        if (ui.sort === col) ui.dir *= -1; else { ui.sort = col; ui.dir = 1; }
+        draw();
+      };
+    });
+    if (ui.q) $("#qTar").focus();
   };
   draw();
 }
