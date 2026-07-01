@@ -110,19 +110,25 @@ function diasHasta(fechaISO) {
 function barChart(data, { height = 200, color = "var(--primary)", money = true } = {}) {
   if (!data.length) return `<p class="muted">Sin datos para graficar.</p>`;
   const max = Math.max(...data.map((d) => d.value), 1);
-  const bw = 100 / data.length;
+  const width = 640;
+  const chartTop = 34;
+  const chartBottom = 176;
+  const chartHeight = chartBottom - chartTop;
+  const slot = width / data.length;
+  const barWidth = Math.min(76, slot * .58);
   const bars = data.map((d, i) => {
-    const h = (d.value / max) * 78;
-    const x = i * bw;
+    const h = (d.value / max) * chartHeight;
+    const x = i * slot + (slot - barWidth) / 2;
+    const center = i * slot + slot / 2;
     return `
-      <g>
-        <rect x="${(x + bw * 0.15).toFixed(2)}" y="${(82 - h).toFixed(2)}" width="${(bw * 0.7).toFixed(2)}" height="${h.toFixed(2)}"
-              rx="1.4" fill="${color}"><title>${esc(d.label)}: ${money ? formatCOP(d.value) : d.value}</title></rect>
-        <text x="${(x + bw / 2).toFixed(2)}" y="96" font-size="3.4" text-anchor="middle" fill="var(--muted)">${esc(d.label)}</text>
-        ${d.value ? `<text x="${(x + bw / 2).toFixed(2)}" y="${(80 - h).toFixed(2)}" font-size="3" text-anchor="middle" fill="var(--text-soft)">${money ? "$" + (d.value / 1000).toFixed(0) + "k" : d.value}</text>` : ""}
+      <g class="chart-bar">
+        <rect x="${x.toFixed(2)}" y="${(chartBottom - h).toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}"
+              rx="8" fill="${color}"><title>${esc(d.label)}: ${money ? formatCOP(d.value) : d.value}</title></rect>
+        <text x="${center.toFixed(2)}" y="204" font-size="13" font-weight="600" text-anchor="middle" fill="var(--muted)">${esc(d.label)}</text>
+        ${d.value ? `<text x="${center.toFixed(2)}" y="${Math.max(22, chartBottom - h - 9).toFixed(2)}" font-size="13" font-weight="700" text-anchor="middle" fill="var(--text-soft)">${money ? "$" + (d.value / 1000).toFixed(0) + "k" : d.value}</text>` : ""}
       </g>`;
   }).join("");
-  return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:${height}px" role="img">${bars}</svg>`;
+  return `<div class="bar-chart"><svg viewBox="0 0 ${width} 220" preserveAspectRatio="xMidYMid meet" style="width:100%;height:${height}px" role="img" aria-label="Gráfica de barras">${bars}</svg></div>`;
 }
 
 /** Exporta filas (array de objetos) a un .xlsx descargable. */
@@ -222,7 +228,7 @@ function unirAsociados(...listas) {
 ========================================================= */
 const views = {
   resumen: { title: "Resumen", subtitle: "Estado general del convenio", render: renderResumen },
-  ciclos: { title: "Ciclos y fechas", subtitle: "Fechas de inscripción por ciclo", render: renderCiclos },
+  ciclos: { title: "Ciclos y horarios", subtitle: "Estudiantes, servicios y fechas por ciclo", render: renderCiclos },
   estudiantes: { title: "Estudiantes", subtitle: "Historial y seguimiento", render: renderEstudiantes },
   inscripciones: { title: "Inscripciones", subtitle: "Registro por ciclo", render: renderInscripciones },
   planilla: { title: "Importar planilla", subtitle: "Carga masiva desde el Excel de FESICOL", render: renderPlanilla, admin: true },
@@ -350,8 +356,8 @@ async function renderCiclos() {
   const rows = state.ciclos.map((c) => {
     const insN = state.inscripciones.filter((i) => i.cicloId === c.id).length;
     const vencido = c.fechaLimiteInscripcion && c.fechaLimiteInscripcion < hoy;
-    return `<tr>
-      <td><strong>${esc(c.nombre)}</strong></td>
+    return `<tr class="cycle-row" data-cycle="${c.id}" tabindex="0" role="button" aria-label="Ver información de ${esc(c.nombre)}">
+      <td><span class="cycle-name"><span class="cycle-chevron" aria-hidden="true">›</span><strong>${esc(c.nombre)}</strong></span></td>
       <td>${esc(c.fechaLimiteInscripcion || "—")} ${vencido ? '<span class="pill gray">cerrado</span>' : ""}</td>
       <td>${esc(c.fechaInicioClases || "—")}</td>
       <td><span class="pill ${c.estado === "abierto" ? "green" : "blue"}">${esc(c.estado || "—")}</span></td>
@@ -362,9 +368,29 @@ async function renderCiclos() {
       </td></tr>`;
   }).join("") || `<tr><td colspan="6" class="muted">Sin ciclos. Crea el primero.</td></tr>`;
 
-  content.innerHTML = `<section class="panel"><table class="data-table">
+  content.innerHTML = `<section class="panel cycle-list-panel">
+    <div class="panel-heading"><div><h3>Ciclos y horarios</h3><p class="muted sm">Selecciona un ciclo para ver sus estudiantes, servicios e información completa.</p></div></div>
+    <div class="table-wrap"><table class="data-table">
     <thead><tr><th>Ciclo</th><th>Límite inscripción</th><th>Inicio clases</th><th>Estado</th><th>Inscritos</th><th></th></tr></thead>
-    <tbody>${rows}</tbody></table></section>`;
+    <tbody>${rows}</tbody></table></div></section>
+    <section id="cycleDetail" aria-live="polite"></section>`;
+
+  const openCycle = (id) => {
+    content.querySelectorAll(".cycle-row").forEach((row) => row.classList.toggle("selected", row.dataset.cycle === id));
+    renderCycleDetail(id);
+  };
+  content.querySelectorAll("[data-cycle]").forEach((row) => {
+    row.onclick = (event) => {
+      if (event.target.closest("button")) return;
+      openCycle(row.dataset.cycle);
+    };
+    row.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openCycle(row.dataset.cycle);
+      }
+    };
+  });
 
   content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => {
     formCiclo(state.ciclos.find((c) => c.id === b.dataset.edit));
@@ -374,6 +400,49 @@ async function renderCiclos() {
     await DB.deleteCiclo(b.dataset.del);
     await refresh();
   });
+}
+
+function renderCycleDetail(cicloId) {
+  const cycle = state.ciclos.find((c) => c.id === cicloId);
+  const target = $("#cycleDetail");
+  if (!cycle || !target) return;
+  const inscripciones = state.inscripciones.filter((i) => i.cicloId === cicloId);
+  const studentIds = new Set(inscripciones.map((i) => i.estudianteId).filter(Boolean));
+  const total = inscripciones.reduce((sum, item) => sum + (item.precio || 0), 0);
+  const rows = inscripciones.map((i) => {
+    const estudiante = state.estudiantes.find((e) => e.id === i.estudianteId);
+    const asociado = i.asociadoNombre || asociadosDe(estudiante)[0]?.nombre || "—";
+    return `<tr>
+      <td><strong>${esc(estudiante?.nombre || i.estudianteNombre || "—")}</strong></td>
+      <td>${esc(asociado)}</td>
+      <td>${esc(i.servicio || i.modalidad || "—")}</td>
+      <td>${esc(i.duracion || "—")}</td>
+      <td>${esc(i.mes || "—")}</td>
+      <td>${formatCOP(i.precio || 0)}</td>
+      <td><span class="pill blue">${esc(i.estado || "—")}</span></td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="7" class="cycle-empty">Este ciclo todavía no tiene estudiantes inscritos.</td></tr>`;
+
+  target.innerHTML = `<section class="panel cycle-detail">
+    <div class="cycle-detail-head">
+      <div>
+        <span class="muted sm">Detalle del ciclo</span>
+        <h3>${esc(cycle.nombre)}</h3>
+        <p class="muted">Cierre de inscripción: <strong>${esc(cycle.fechaLimiteInscripcion || "—")}</strong> · Inicio de clases: <strong>${esc(cycle.fechaInicioClases || "—")}</strong></p>
+      </div>
+      <span class="pill ${cycle.estado === "abierto" ? "green" : "blue"}">${esc(cycle.estado || "—")}</span>
+    </div>
+    <div class="cycle-summary">
+      <div><span>Estudiantes</span><strong>${studentIds.size}</strong></div>
+      <div><span>Servicios inscritos</span><strong>${inscripciones.length}</strong></div>
+      <div><span>Valor del ciclo</span><strong>${formatCOP(total)}</strong></div>
+    </div>
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Estudiante</th><th>Solicitado por</th><th>Servicio / modalidad</th><th>Duración</th><th>Mes</th><th>Precio</th><th>Estado</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </section>`;
+  target.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function formCiclo(c = null) {
