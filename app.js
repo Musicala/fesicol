@@ -25,7 +25,7 @@ DB.initDb(db, storage);
 const ADMIN_EMAILS = [
   "alekcaballeromusic@gmail.com",
   "catalina.medina.leal@gmail.com",
-  "imusicala@gmail.com",
+  "adminmusicala@gmail.com",
   "musicalaasesor@gmail.com"
 ];
 const isAdminEmail = (email) => ADMIN_EMAILS.includes(String(email || "").trim().toLowerCase());
