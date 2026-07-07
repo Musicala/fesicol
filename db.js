@@ -223,6 +223,64 @@ export async function mergeEstudiantes(keepId, dropIds = []) {
 }
 
 /* =========================================================
+   CONTACTOS  (base general: interesados, prospectos e inscritos)
+   ---------------------------------------------------------
+   Guarda a todo el que ha mostrado interés, aunque nunca haya
+   tomado clase. Campos: nombre, telefono, email, asociado,
+   interes (instrumento/servicio), estado, origen, notas.
+========================================================= */
+export async function getContactos() {
+  const qs = await getDocs(query(col("contactos"), orderBy("nombre", "asc")));
+  return mapSnap(qs);
+}
+
+export function watchContactos(cb) {
+  return onSnapshot(query(col("contactos"), orderBy("nombre", "asc")), (qs) =>
+    cb(mapSnap(qs))
+  );
+}
+
+export async function saveContacto(data, id = null) {
+  const payload = { ...data, updatedAt: serverTimestamp() };
+  if (id) {
+    await updateDoc(doc(_db, "contactos", id), payload);
+    return id;
+  }
+  payload.createdAt = serverTimestamp();
+  payload.origen = data.origen || "manual";
+  const r = await addDoc(col("contactos"), payload);
+  return r.id;
+}
+
+export async function deleteContacto(id) {
+  await deleteDoc(doc(_db, "contactos", id));
+}
+
+/**
+ * Importa contactos en lote (desde un .csv).
+ * items: [{ nombre, telefono, email, asociado, interes, estado, notas }]
+ * Reutiliza el id existente cuando se pasa `id`, si no crea uno nuevo.
+ */
+export async function importContactos(items) {
+  const batch = writeBatch(_db);
+  let nuevos = 0, actualizados = 0;
+  items.forEach((it) => {
+    const { id, ...campos } = it;
+    if (id) {
+      batch.set(doc(_db, "contactos", id),
+        { ...campos, updatedAt: serverTimestamp() }, { merge: true });
+      actualizados++;
+    } else {
+      const ref = doc(col("contactos"));
+      batch.set(ref, { ...campos, origen: campos.origen || "csv", createdAt: serverTimestamp() });
+      nuevos++;
+    }
+  });
+  await batch.commit();
+  return { nuevos, actualizados, total: items.length };
+}
+
+/* =========================================================
    INSCRIPCIONES  (estudiante + ciclo + precio)
 ========================================================= */
 export async function getInscripciones() {

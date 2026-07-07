@@ -52,6 +52,7 @@ const state = {
   user: null,
   ciclos: [],
   estudiantes: [],
+  contactos: [],
   inscripciones: [],
   facturas: [],
   tarifas: [],
@@ -186,10 +187,10 @@ function defaultCiclos() {
    Carga de datos
 ========================================================= */
 async function loadAll() {
-  const [ciclos, estudiantes, inscripciones, facturas, tarifas] = await Promise.all([
-    DB.getCiclos(), DB.getEstudiantes(), DB.getInscripciones(), DB.getFacturas(), DB.getTarifas()
+  const [ciclos, estudiantes, contactos, inscripciones, facturas, tarifas] = await Promise.all([
+    DB.getCiclos(), DB.getEstudiantes(), DB.getContactos(), DB.getInscripciones(), DB.getFacturas(), DB.getTarifas()
   ]);
-  Object.assign(state, { ciclos, estudiantes, inscripciones, facturas, tarifas });
+  Object.assign(state, { ciclos, estudiantes, contactos, inscripciones, facturas, tarifas });
 }
 
 function cicloNombre(id) {
@@ -230,6 +231,7 @@ const views = {
   resumen: { title: "Resumen", subtitle: "Estado general del convenio", render: renderResumen },
   ciclos: { title: "Ciclos y horarios", subtitle: "Estudiantes, servicios y fechas por ciclo", render: renderCiclos },
   estudiantes: { title: "Estudiantes", subtitle: "Historial y seguimiento", render: renderEstudiantes },
+  contactos: { title: "Contactos", subtitle: "Base general: interesados, prospectos e inscritos", render: renderContactos },
   inscripciones: { title: "Inscripciones", subtitle: "Registro por ciclo", render: renderInscripciones },
   planilla: { title: "Importar planilla", subtitle: "Carga masiva desde el Excel de FESICOL", render: renderPlanilla, admin: true },
   facturacion: { title: "Facturación", subtitle: "Facturas, cuentas de cobro y soportes", render: renderFacturacion },
@@ -674,6 +676,242 @@ async function verHistorial(estId) {
     ${asocBox}
     <table class="data-table"><thead><tr><th>Ciclo</th><th>Mes</th><th>Servicio</th><th>Solicitado por</th><th>Precio</th><th>Estado</th></tr></thead><tbody>${rows}</tbody></table>
     <p style="margin-top:12px"><strong>Total del plan de ${esc(est?.nombre || "este estudiante")}:</strong> ${formatCOP(total)} <span class="muted">· ${ins.length} servicio(s) sumados de todos sus asociados</span></p>`);
+}
+
+/* =========================================================
+   CONTACTOS · base general (interesados, prospectos, inscritos)
+========================================================= */
+const CONTACTO_ESTADOS = ["Interesado", "Contactado", "Activo", "Inactivo", "No interesado"];
+const contactoEstadoPill = (e) => {
+  const s = norm(e);
+  if (s.includes("activo") && !s.includes("in")) return "green";
+  if (s.includes("interesado") && !s.includes("no")) return "blue";
+  if (s.includes("contactado")) return "amber";
+  return "gray";
+};
+
+async function renderContactos() {
+  $("#topbarActions").innerHTML =
+    `<input id="qCon" class="search" placeholder="Buscar…">` +
+    `<select id="fEstCon" class="search"><option value="">Todos los estados</option>${CONTACTO_ESTADOS.map((e) => `<option value="${e}">${e}</option>`).join("")}</select>` +
+    `<button class="btn secondary sm" id="expCon">⬇ Excel</button>` +
+    adminOnly(`<button class="btn secondary sm" id="impCon">📥 Importar CSV</button><button class="btn primary sm" id="addCon">+ Contacto</button>`);
+
+  $("#addCon") && ($("#addCon").onclick = () => formContacto());
+  $("#impCon") && ($("#impCon").onclick = () => importarContactosCSV());
+  $("#expCon").onclick = () => exportToExcel(state.contactos.map((c) => ({
+    Nombre: c.nombre || "", Telefono: c.telefono || "", Email: c.email || "",
+    Asociado: c.asociado || "", "Interés / Instrumento": c.interes || "",
+    Estado: c.estado || "", Origen: c.origen || "", Notas: c.notas || ""
+  })), "contactos-fesicol.xlsx", "Contactos");
+
+  const draw = () => {
+    const q = ($("#qCon")?.value || "").trim().toLowerCase();
+    const fEst = $("#fEstCon")?.value || "";
+    const list = state.contactos.filter((c) => {
+      if (fEst && norm(c.estado) !== norm(fEst)) return false;
+      if (!q) return true;
+      return [c.nombre, c.telefono, c.email, c.asociado, c.interes, c.notas]
+        .some((v) => String(v || "").toLowerCase().includes(q));
+    });
+    const rows = list.map((c) => `<tr>
+      <td><strong>${esc(c.nombre || "—")}</strong></td>
+      <td>${esc(c.telefono || "—")}</td>
+      <td>${esc(c.asociado || "—")}</td>
+      <td>${esc(c.interes || "—")}</td>
+      <td><span class="pill ${contactoEstadoPill(c.estado)}">${esc(c.estado || "—")}</span></td>
+      <td class="muted">${esc(c.origen || "—")}</td>
+      <td class="row-actions">${adminOnly(`
+        <button class="link-btn" data-edit="${c.id}">Editar</button>
+        <button class="link-btn danger" data-del="${c.id}">Eliminar</button>`)}
+      </td></tr>`).join("") || `<tr><td colspan="7" class="muted">Sin contactos. Agrega uno o importa un CSV.</td></tr>`;
+
+    content.innerHTML = `<section class="panel">
+      <p class="muted sm" style="margin:.2rem 0 .6rem">${list.length} contacto(s)${fEst || q ? " (filtrados)" : ""} · total ${state.contactos.length}</p>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Nombre</th><th>Teléfono</th><th>Asociado</th><th>Interés</th><th>Estado</th><th>Origen</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table></div></section>`;
+    content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => formContacto(state.contactos.find((x) => x.id === b.dataset.edit)));
+    content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
+      if (!confirm("¿Eliminar contacto?")) return;
+      await DB.deleteContacto(b.dataset.del); await refresh();
+      toast("Contacto eliminado.", "success");
+    });
+  };
+  draw();
+  $("#qCon").oninput = draw;
+  $("#fEstCon").onchange = draw;
+}
+
+function formContacto(c = null) {
+  const estOpts = CONTACTO_ESTADOS.map((e) => `<option value="${e}" ${norm(c?.estado) === norm(e) ? "selected" : ""}>${e}</option>`).join("");
+  openModal(c ? "Editar contacto" : "Nuevo contacto", `
+    <form id="fc" class="form">
+      <div class="grid-2">
+        <label class="field"><span>Nombre *</span><input name="nombre" value="${esc(c?.nombre || "")}" required></label>
+        <label class="field"><span>Teléfono</span><input name="telefono" value="${esc(c?.telefono || "")}"></label>
+      </div>
+      <div class="grid-2">
+        <label class="field"><span>Correo</span><input name="email" type="email" value="${esc(c?.email || "")}"></label>
+        <label class="field"><span>Asociado / referido por</span><input name="asociado" value="${esc(c?.asociado || "")}"></label>
+      </div>
+      <div class="grid-2">
+        <label class="field"><span>Interés / Instrumento</span><input name="interes" placeholder="Guitarra, Canto, Piano…" value="${esc(c?.interes || "")}"></label>
+        <label class="field"><span>Estado</span><select name="estado">${estOpts}</select></label>
+      </div>
+      <label class="field"><span>Notas</span><textarea name="notas" rows="3">${esc(c?.notas || "")}</textarea></label>
+      <div class="form-row"><button class="btn primary" type="submit">Guardar</button></div>
+    </form>`);
+  $("#fc").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    fd.nombre = String(fd.nombre || "").trim();
+    if (!fd.nombre) { toast("El nombre es obligatorio.", "error"); return; }
+    await DB.saveContacto(fd, c?.id || null);
+    closeModal(); await refresh();
+    toast("Contacto guardado ✅", "success");
+  };
+}
+
+/* ---------- Importar contactos desde CSV ---------- */
+let _pendingContactos = null;
+
+/** Detecta el índice de una columna por varios posibles nombres de encabezado. */
+function colIdx(header, needles) {
+  return header.findIndex((h) => needles.some((n) => h.includes(n)));
+}
+
+function importarContactosCSV() {
+  openModal("Importar contactos (.csv)", `
+    <p class="muted">Sube un archivo <b>.csv</b>. El panel reconoce columnas como
+    <i>nombre, teléfono/contacto, asociado, instrumento, estado, correo y notas</i>,
+    te muestra una vista previa y marca los que ya existen (por nombre) para no duplicar.</p>
+    <label class="field"><span>Archivo .csv</span><input id="conFile" type="file" accept=".csv,text/csv"></label>
+    <div class="form-row"><button class="btn primary" id="conParse">Leer archivo</button></div>
+    <div id="conPreview"></div>`);
+  $("#conParse").onclick = async () => {
+    const file = $("#conFile").files[0];
+    if (!file) { toast("Selecciona un archivo .csv", "error"); return; }
+    setLoading(true, "Leyendo CSV…");
+    try {
+      const XLSX = await loadXLSX();
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array", raw: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      _pendingContactos = parseContactosRows(rows);
+      drawContactosPreview();
+    } catch (err) {
+      console.error(err); toast("No pude leer el CSV: " + (err?.message || err), "error", 5000);
+    } finally { setLoading(false); }
+  };
+}
+
+function parseContactosRows(rows) {
+  // Busca la fila de encabezados (la que contiene "nombre")
+  let hIdx = rows.findIndex((r) => r.some((c) => norm(c).includes("nombre")));
+  if (hIdx < 0) hIdx = 0;
+  const header = rows[hIdx].map(norm);
+  const idx = {
+    inscrito: colIdx(header, ["nombre inscrito", "nombre del inscrito", "inscrito", "nombre estudiante", "nombre"]),
+    asociado: colIdx(header, ["nombre asociado", "asociado", "referido", "acudiente"]),
+    interes: colIdx(header, ["instrumento", "interes", "interés", "servicio", "modalidad"]),
+    estado: colIdx(header, ["estado"]),
+    tel: colIdx(header, ["contacto", "telefono", "teléfono", "celular", "whatsapp"]),
+    email: colIdx(header, ["correo", "email", "mail"]),
+    notas: colIdx(header, ["notas", "observacion", "observación", "comentario"])
+  };
+  const val = (r, i) => (i >= 0 ? String(r[i] ?? "").trim() : "");
+  const out = [];
+  const enLote = []; // para dedupe dentro del propio archivo
+  for (let i = hIdx + 1; i < rows.length; i++) {
+    const r = rows[i];
+    const nombre = val(r, idx.inscrito);
+    if (!nombre || nombre.length < 2) continue;
+    const c = {
+      nombre,
+      asociado: val(r, idx.asociado),
+      interes: val(r, idx.interes),
+      estado: val(r, idx.estado) || "Interesado",
+      telefono: val(r, idx.tel),
+      email: val(r, idx.email),
+      notas: val(r, idx.notas)
+    };
+    // ¿ya existe en la BD? (coincidencia difusa por nombre) → actualizar en vez de duplicar
+    const existente = findContactoSimilar(nombre);
+    c.existenteId = existente?.id || null;
+    // ¿duplicado dentro del mismo archivo?
+    c.dupEnLote = enLote.some((n) => nombresCoinciden(n, nombre));
+    enLote.push(nombre);
+    out.push(c);
+  }
+  return { rows: out };
+}
+
+function findContactoSimilar(nombre) {
+  return state.contactos.find((c) => nombresCoinciden(c.nombre, nombre)) || null;
+}
+
+function drawContactosPreview() {
+  const data = _pendingContactos;
+  if (!data || !data.rows.length) {
+    $("#conPreview").innerHTML = `<div class="alert warn">No encontré contactos en el archivo.</div>`;
+    return;
+  }
+  const nuevos = data.rows.filter((r) => !r.existenteId && !r.dupEnLote).length;
+  const existentes = data.rows.filter((r) => r.existenteId).length;
+  const dups = data.rows.filter((r) => r.dupEnLote).length;
+  const body = data.rows.map((r) => {
+    const badge = r.existenteId ? '<span class="pill amber">actualiza</span>'
+      : r.dupEnLote ? '<span class="pill gray">repetido</span>'
+      : '<span class="pill green">nuevo</span>';
+    return `<tr>
+      <td>${esc(r.nombre)} ${badge}</td>
+      <td>${esc(r.telefono || "—")}</td>
+      <td>${esc(r.asociado || "—")}</td>
+      <td>${esc(r.interes || "—")}</td>
+      <td>${esc(r.estado || "—")}</td></tr>`;
+  }).join("");
+  $("#conPreview").innerHTML = `
+    <section class="panel" style="margin-top:.75rem">
+      <h3>Vista previa (${data.rows.length} filas)</h3>
+      <p class="muted sm">${nuevos} nuevo(s) · ${existentes} se actualizan (ya existen) · ${dups} repetido(s) en el archivo (se omiten).</p>
+      <label class="field" style="flex-direction:row;align-items:center;gap:.5rem">
+        <input type="checkbox" id="conActualiza" checked>
+        <span>Actualizar datos de los contactos que ya existen</span>
+      </label>
+      <div class="table-wrap" style="max-height:340px;overflow:auto"><table class="data-table">
+        <thead><tr><th>Nombre</th><th>Teléfono</th><th>Asociado</th><th>Interés</th><th>Estado</th></tr></thead>
+        <tbody>${body}</tbody></table></div>
+      <div class="form-row"><button class="btn primary" id="conConfirm">Confirmar e importar</button></div>
+    </section>`;
+  $("#conConfirm").onclick = () => confirmImportContactos();
+}
+
+async function confirmImportContactos() {
+  const data = _pendingContactos;
+  if (!data) return;
+  const actualizar = $("#conActualiza")?.checked;
+  const items = data.rows
+    .filter((r) => !r.dupEnLote) // omite repetidos dentro del archivo
+    .filter((r) => actualizar || !r.existenteId) // si no se actualiza, salta los existentes
+    .map((r) => ({
+      id: actualizar ? (r.existenteId || null) : null,
+      nombre: r.nombre, telefono: r.telefono, email: r.email,
+      asociado: r.asociado, interes: r.interes, estado: r.estado,
+      notas: r.notas, origen: "csv"
+    }));
+  if (!items.length) { toast("No hay contactos para importar.", "info"); return; }
+  setLoading(true, "Importando contactos…");
+  try {
+    const res = await DB.importContactos(items);
+    _pendingContactos = null;
+    closeModal();
+    await refresh();
+    toast(`Importados: ${res.nuevos} nuevo(s), ${res.actualizados} actualizado(s) ✅`, "success", 5000);
+  } catch (err) {
+    console.error(err); toast("Error importando: " + (err?.message || err), "error", 6000);
+  } finally { setLoading(false); }
 }
 
 /* ---------- INSCRIPCIONES ---------- */
