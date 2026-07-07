@@ -690,15 +690,20 @@ const contactoEstadoPill = (e) => {
   return "gray";
 };
 
+const CONTACTO_CAMPOS_TXT = ["nombre", "asociado", "interes", "notas", "email", "telefono", "estado"];
+const contactoTieneMojibake = (c) => CONTACTO_CAMPOS_TXT.some((k) => fixMojibake(c[k]) !== c[k]);
+
 async function renderContactos() {
+  const hayMojibake = state.contactos.some(contactoTieneMojibake);
   $("#topbarActions").innerHTML =
     `<input id="qCon" class="search" placeholder="Buscar…">` +
     `<select id="fEstCon" class="search"><option value="">Todos los estados</option>${CONTACTO_ESTADOS.map((e) => `<option value="${e}">${e}</option>`).join("")}</select>` +
     `<button class="btn secondary sm" id="expCon">⬇ Excel</button>` +
-    adminOnly(`<button class="btn secondary sm" id="impCon">📥 Importar CSV</button><button class="btn primary sm" id="addCon">+ Contacto</button>`);
+    adminOnly(`${hayMojibake ? `<button class="btn secondary sm" id="fixCon">🩹 Reparar acentos</button>` : ""}<button class="btn secondary sm" id="impCon">📥 Importar CSV</button><button class="btn primary sm" id="addCon">+ Contacto</button>`);
 
   $("#addCon") && ($("#addCon").onclick = () => formContacto());
   $("#impCon") && ($("#impCon").onclick = () => importarContactosCSV());
+  $("#fixCon") && ($("#fixCon").onclick = () => repararContactosMojibake());
   $("#expCon").onclick = () => exportToExcel(state.contactos.map((c) => ({
     Nombre: c.nombre || "", Telefono: c.telefono || "", Email: c.email || "",
     Asociado: c.asociado || "", "Interés / Instrumento": c.interes || "",
@@ -795,8 +800,9 @@ function importarContactosCSV() {
     setLoading(true, "Leyendo CSV…");
     try {
       const XLSX = await loadXLSX();
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array", raw: true });
+      // Leer como texto decodifica UTF-8 correctamente (evita mojibake en tildes/ñ).
+      const text = await file.text();
+      const wb = XLSX.read(text, { type: "string", raw: true });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
       _pendingContactos = parseContactosRows(rows);
@@ -911,6 +917,26 @@ async function confirmImportContactos() {
     toast(`Importados: ${res.nuevos} nuevo(s), ${res.actualizados} actualizado(s) ✅`, "success", 5000);
   } catch (err) {
     console.error(err); toast("Error importando: " + (err?.message || err), "error", 6000);
+  } finally { setLoading(false); }
+}
+
+/** Repara los contactos ya guardados con acentos/ñ dañados (mojibake). */
+async function repararContactosMojibake() {
+  const afectados = state.contactos.filter(contactoTieneMojibake);
+  if (!afectados.length) { toast("No hay acentos que reparar ✅", "info"); return; }
+  if (!confirm(`Se corregirán las tildes y ñ de ${afectados.length} contacto(s). ¿Continuar?`)) return;
+  const items = afectados.map((c) => {
+    const fix = { id: c.id };
+    CONTACTO_CAMPOS_TXT.forEach((k) => { if (c[k] != null) fix[k] = fixMojibake(c[k]); });
+    return fix;
+  });
+  setLoading(true, "Reparando acentos…");
+  try {
+    await DB.importContactos(items);
+    await refresh();
+    toast(`Reparados ${items.length} contacto(s) ✅`, "success", 5000);
+  } catch (err) {
+    console.error(err); toast("Error al reparar: " + (err?.message || err), "error", 6000);
   } finally { setLoading(false); }
 }
 
@@ -1207,6 +1233,16 @@ function formUsuario() {
 
 /* ---------- IMPORTAR PLANILLA (Fase 2) ---------- */
 const norm = (s) => String(s ?? "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ");
+
+/** Repara texto UTF-8 que se leyó como Latin-1 (mojibake: "MÃºsica" → "Música"). */
+function fixMojibake(s) {
+  if (typeof s !== "string" || !/[ÃÂ]/.test(s)) return s;
+  try {
+    const bytes = Uint8Array.from([...s].map((c) => c.charCodeAt(0) & 0xff));
+    const dec = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    return dec.includes("�") ? s : dec; // si aparece carácter inválido, deja el original
+  } catch { return s; }
+}
 
 /* ---------- Coincidencia difusa de nombres ----------
    Reconoce que dos nombres son el mismo estudiante aunque difieran en
