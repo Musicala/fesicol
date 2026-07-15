@@ -84,6 +84,7 @@ function esMusifamiliar(servicio) { return /musifamiliar/i.test(String(servicio 
 function precioFacturable(i) { return i.paqueteMusifamiliarId && !i.beneficiarioPrincipal ? 0 : (i.precio || 0); }
 function etiquetaPaquete(i) { return i.paqueteMusifamiliarId ? '<span class="pill amber">Paquete compartido</span>' : ""; }
 function beneficiariosPaquete(i) {
+  if (!i) return [];
   return i.paqueteMusifamiliarId
     ? state.inscripciones.filter((x) => x.paqueteMusifamiliarId === i.paqueteMusifamiliarId)
     : [i];
@@ -92,9 +93,15 @@ function beneficiariosPaquete(i) {
 function openModal(title, html) {
   $("#modalTitle").textContent = title;
   modalBody.innerHTML = html;
-  if (typeof modal.showModal === "function" && !modal.open) modal.showModal();
+  if (modal.open) return;
+  if (typeof modal.showModal === "function") modal.showModal();
+  else modal.setAttribute("open", "");
 }
-function closeModal() { if (modal.open) modal.close(); }
+function closeModal() {
+  if (!modal.open) return;
+  if (typeof modal.close === "function") modal.close();
+  else modal.removeAttribute("open");
+}
 $("#closeModal")?.addEventListener("click", closeModal);
 modal?.addEventListener("click", (e) => {
   const r = modal.getBoundingClientRect();
