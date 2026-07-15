@@ -80,6 +80,14 @@ function toast(message, type = "info", ttl = 3200) {
 }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function monthISO() { return new Date().toISOString().slice(0, 7); }
+function esMusifamiliar(servicio) { return /musifamiliar/i.test(String(servicio || "")); }
+function precioFacturable(i) { return i.paqueteMusifamiliarId && !i.beneficiarioPrincipal ? 0 : (i.precio || 0); }
+function etiquetaPaquete(i) { return i.paqueteMusifamiliarId ? '<span class="pill amber">Paquete compartido</span>' : ""; }
+function beneficiariosPaquete(i) {
+  return i.paqueteMusifamiliarId
+    ? state.inscripciones.filter((x) => x.paqueteMusifamiliarId === i.paqueteMusifamiliarId)
+    : [i];
+}
 
 function openModal(title, html) {
   $("#modalTitle").textContent = title;
@@ -255,9 +263,9 @@ async function navigate(view) {
 /* ---------- RESUMEN ---------- */
 async function renderResumen() {
   const ins = state.inscripciones;
-  const ingresosTotal = ins.reduce((a, b) => a + (b.precio || 0), 0);
+  const ingresosTotal = ins.reduce((a, b) => a + precioFacturable(b), 0);
   const mes = monthISO();
-  const ingresosMes = ins.filter((i) => (i.mes || "").startsWith(mes)).reduce((a, b) => a + (b.precio || 0), 0);
+  const ingresosMes = ins.filter((i) => (i.mes || "").startsWith(mes)).reduce((a, b) => a + precioFacturable(b), 0);
   const activos = state.estudiantes.filter((e) => e.activo !== false).length;
 
   // Próxima fecha límite de inscripción
@@ -289,7 +297,7 @@ async function renderResumen() {
 
   // Ingresos por mes (últimos 6 meses con datos)
   const ingresosPorMes = {};
-  ins.forEach((i) => { if (i.mes) ingresosPorMes[i.mes] = (ingresosPorMes[i.mes] || 0) + (i.precio || 0); });
+  ins.forEach((i) => { if (i.mes) ingresosPorMes[i.mes] = (ingresosPorMes[i.mes] || 0) + precioFacturable(i); });
   const chartData = Object.keys(ingresosPorMes).sort().slice(-6)
     .map((ym) => ({ label: mesLabel(ym), value: ingresosPorMes[ym] }));
 
@@ -410,7 +418,7 @@ function renderCycleDetail(cicloId) {
   if (!cycle || !target) return;
   const inscripciones = state.inscripciones.filter((i) => i.cicloId === cicloId);
   const studentIds = new Set(inscripciones.map((i) => i.estudianteId).filter(Boolean));
-  const total = inscripciones.reduce((sum, item) => sum + (item.precio || 0), 0);
+  const total = inscripciones.reduce((sum, item) => sum + precioFacturable(item), 0);
   const rows = inscripciones.map((i) => {
     const estudiante = state.estudiantes.find((e) => e.id === i.estudianteId);
     const asociado = i.asociadoNombre || asociadosDe(estudiante)[0]?.nombre || "—";
@@ -420,7 +428,7 @@ function renderCycleDetail(cicloId) {
       <td>${esc(i.servicio || i.modalidad || "—")}</td>
       <td>${esc(i.duracion || "—")}</td>
       <td>${esc(i.mes || "—")}</td>
-      <td>${formatCOP(i.precio || 0)}</td>
+      <td>${formatCOP(i.precio || 0)} ${etiquetaPaquete(i)}</td>
       <td><span class="pill blue">${esc(i.estado || "—")}</span></td>
     </tr>`;
   }).join("") || `<tr><td colspan="7" class="cycle-empty">Este ciclo todavía no tiene estudiantes inscritos.</td></tr>`;
@@ -671,7 +679,7 @@ async function verHistorial(estId) {
       </ul>
     </div>` : "";
   const rows = ins.map((i) => `<tr><td>${esc(cicloNombre(i.cicloId))}</td><td>${esc(i.mes || "—")}</td><td>${esc(i.servicio || i.modalidad || "—")}</td><td>${esc(i.asociadoNombre || "—")}</td><td>${formatCOP(i.precio)}</td><td>${esc(i.estado || "—")}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Sin inscripciones registradas.</td></tr>`;
-  const total = ins.reduce((a, b) => a + (b.precio || 0), 0);
+  const total = ins.reduce((a, b) => a + precioFacturable(b), 0);
   openModal(`Historial · ${est?.nombre || ""}`, `
     ${asocBox}
     <table class="data-table"><thead><tr><th>Ciclo</th><th>Mes</th><th>Servicio</th><th>Solicitado por</th><th>Precio</th><th>Estado</th></tr></thead><tbody>${rows}</tbody></table>
@@ -946,7 +954,7 @@ async function renderInscripciones() {
   $("#addIns") && ($("#addIns").onclick = () => formInscripcion());
   $("#expIns").onclick = () => exportToExcel(state.inscripciones.map((i) => ({
     Estudiante: estudianteNombre(i.estudianteId) || i.estudianteNombre || "", "Solicitado por": i.asociadoNombre ?? "", Ciclo: cicloNombre(i.cicloId), Mes: i.mes ?? "",
-    Servicio: i.servicio ?? "", Modalidad: i.modalidad ?? "", Duracion: i.duracion ?? "", Precio: i.precio ?? 0, Estado: i.estado ?? ""
+    Servicio: i.servicio ?? "", Modalidad: i.modalidad ?? "", Duracion: i.duracion ?? "", "Paquete compartido": i.paqueteMusifamiliarId ? "Sí" : "No", "Valor del paquete": i.precio ?? 0, Estado: i.estado ?? ""
   })), "inscripciones-fesicol.xlsx", "Inscripciones");
 
   const rows = state.inscripciones.map((i) => `<tr>
@@ -956,7 +964,7 @@ async function renderInscripciones() {
       <td>${esc(i.mes || "—")}</td>
       <td>${esc(i.modalidad || "—")}</td>
       <td>${esc(i.duracion || "—")}</td>
-      <td>${formatCOP(i.precio)}</td>
+      <td>${i.paqueteMusifamiliarId ? `${etiquetaPaquete(i)}<br><span class="muted sm">${beneficiariosPaquete(i).length} beneficiario(s) · ${formatCOP(i.precio)}</span>` : formatCOP(i.precio)}</td>
       <td><span class="pill blue">${esc(i.estado || "—")}</span></td>
       <td class="row-actions">${adminOnly(`
         <button class="link-btn" data-edit="${i.id}">Editar</button>
@@ -964,17 +972,19 @@ async function renderInscripciones() {
       </td></tr>`).join("") || `<tr><td colspan="9" class="muted">Sin inscripciones.</td></tr>`;
 
   content.innerHTML = `<section class="panel"><table class="data-table">
-    <thead><tr><th>Estudiante</th><th>Solicitado por</th><th>Ciclo</th><th>Mes</th><th>Modalidad</th><th>Duración</th><th>Precio</th><th>Estado</th><th></th></tr></thead>
+    <thead><tr><th>Estudiante</th><th>Solicitado por</th><th>Ciclo</th><th>Mes</th><th>Modalidad</th><th>Duración</th><th>Paquete / valor</th><th>Estado</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table></section>`;
   content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => formInscripcion(state.inscripciones.find((x) => x.id === b.dataset.edit)));
   content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
-    if (!confirm("¿Eliminar inscripción?")) return;
+    const inscripcion = state.inscripciones.find((x) => x.id === b.dataset.del);
+    if (!confirm(inscripcion?.paqueteMusifamiliarId ? "¿Eliminar este paquete compartido y todos sus beneficiarios?" : "¿Eliminar inscripción?")) return;
     await DB.deleteInscripcion(b.dataset.del); await refresh();
   });
 }
 
 function formInscripcion(i = null) {
   const estOpts = state.estudiantes.map((e) => `<option value="${e.id}" ${i?.estudianteId === e.id ? "selected" : ""}>${esc(e.nombre)}</option>`).join("");
+  const miembrosActuales = new Set(beneficiariosPaquete(i).map((x) => x.estudianteId));
   const cicloOpts = state.ciclos.map((c) => `<option value="${c.id}" ${i?.cicloId === c.id ? "selected" : ""}>${esc(c.nombre)}</option>`).join("");
   const tarifaOpts = state.tarifas.map((t) => `<option value="${t.precio}" ${i?.servicio === t.servicio ? "selected" : ""} data-serv="${esc(t.servicio)}">${esc(t.servicio)} — ${formatCOP(t.precio)}</option>`).join("");
   openModal(i ? "Editar inscripción" : "Nueva inscripción", `
@@ -988,6 +998,13 @@ function formInscripcion(i = null) {
         <label class="field"><span>Servicio / Tarifa</span><select name="servicio" id="servSel"><option value="">Selecciona…</option>${tarifaOpts}</select></label>
       </div>
       <label class="field"><span>Solicitado por (asociado)</span><select name="asociadoDocumento" id="asocSel"><option value="">—</option></select></label>
+      <section class="musifamiliar-box" id="musifamiliarBox" hidden>
+        <div><strong>Paquete Musifamiliar compartido</strong><p>Un solo pago y una misma cantidad de clases para todos los beneficiarios, con el mismo docente.</p></div>
+        <label class="field"><span>Beneficiarios adicionales</span>
+          <div class="beneficiarios-list" id="beneficiariosList">${state.estudiantes.map((e) => `<label><input type="checkbox" value="${e.id}" ${miembrosActuales.has(e.id) && e.id !== i?.estudianteId ? "checked" : ""}> ${esc(e.nombre)}</label>`).join("")}</div>
+        </label>
+        <p class="muted sm">El estudiante principal también es beneficiario. El valor se contabiliza una sola vez para todo el paquete.</p>
+      </section>
       <div class="grid-2">
         <label class="field"><span>Modalidad</span><input name="modalidad" value="${esc(i?.modalidad || "")}"></label>
         <label class="field"><span>Duración</span><input name="duracion" value="${esc(i?.duracion || "")}"></label>
@@ -1001,6 +1018,10 @@ function formInscripcion(i = null) {
       <div class="form-row"><button class="btn primary" type="submit">Guardar</button></div>
     </form>`);
   const servSel = $("#servSel");
+  const actualizarMusifamiliar = () => {
+    const activo = esMusifamiliar(servSel.selectedOptions[0]?.dataset.serv || servSel.value || i?.servicio);
+    $("#musifamiliarBox").hidden = !activo;
+  };
   servSel.onchange = () => {
     const opt = servSel.selectedOptions[0];
     if (opt?.value) {
@@ -1010,7 +1031,9 @@ function formInscripcion(i = null) {
       const f = $("#f");
       if (!f.modalidad.value) f.modalidad.value = serv.split(" Paquete")[0].split(" 1 mes")[0];
     }
+    actualizarMusifamiliar();
   };
+  actualizarMusifamiliar();
   // Pobla "Solicitado por" con los asociados del estudiante seleccionado
   const estSel = $("#f").estudianteId;
   const asocSel = $("#asocSel");
@@ -1029,7 +1052,12 @@ function formInscripcion(i = null) {
     fd.precio = parsePrice(fd.precio);
     fd.estudianteNombre = estudianteNombre(fd.estudianteId);
     fd.asociadoNombre = asocSel.selectedOptions[0]?.dataset.nombre || "";
-    await DB.saveInscripcion(fd, i?.id || null);
+    if (esMusifamiliar(servSel.selectedOptions[0]?.dataset.serv || fd.servicio)) {
+      const ids = [fd.estudianteId, ...$$("#beneficiariosList input:checked").map((x) => x.value)];
+      await DB.savePaqueteMusifamiliar(fd, ids, i?.paqueteMusifamiliarId || null);
+    } else {
+      await DB.saveInscripcion(fd, i?.id || null);
+    }
     closeModal(); await refresh();
     toast("Inscripción guardada ✅", "success");
   };

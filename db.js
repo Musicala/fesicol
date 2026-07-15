@@ -324,8 +324,50 @@ export async function saveInscripcion(data, id = null) {
   return r.id;
 }
 
+/**
+ * Guarda un único paquete Musifamiliar y una inscripción visible por cada
+ * beneficiario. El valor pertenece al paquete, no se multiplica por persona.
+ */
+export async function savePaqueteMusifamiliar(data, beneficiarioIds, paqueteId = null) {
+  const ids = [...new Set((beneficiarioIds || []).filter(Boolean))];
+  if (!ids.length) throw new Error("Selecciona al menos un beneficiario.");
+  const id = paqueteId || doc(col("inscripciones")).id;
+  const existentes = paqueteId
+    ? mapSnap(await getDocs(query(col("inscripciones"), where("paqueteMusifamiliarId", "==", paqueteId))))
+    : [];
+  const existentesPorEstudiante = new Map(existentes.map((x) => [x.estudianteId, x]));
+  const batch = writeBatch(_db);
+
+  existentes.filter((x) => !ids.includes(x.estudianteId)).forEach((x) =>
+    batch.delete(doc(_db, "inscripciones", x.id))
+  );
+  ids.forEach((estudianteId, indice) => {
+    const previo = existentesPorEstudiante.get(estudianteId);
+    const ref = previo ? doc(_db, "inscripciones", previo.id) : doc(col("inscripciones"));
+    batch.set(ref, {
+      ...data,
+      estudianteId,
+      paqueteMusifamiliarId: id,
+      beneficiarioPrincipal: indice === 0,
+      precio: parsePrice(data.precio),
+      estado: data.estado || "Inscrito",
+      updatedAt: serverTimestamp(),
+      ...(previo ? {} : { createdAt: serverTimestamp() })
+    }, { merge: true });
+  });
+  await batch.commit();
+  return id;
+}
+
 export async function deleteInscripcion(id) {
-  await deleteDoc(doc(_db, "inscripciones", id));
+  const ref = doc(_db, "inscripciones", id);
+  const snap = await getDoc(ref);
+  const paqueteId = snap.data()?.paqueteMusifamiliarId;
+  if (!paqueteId) return deleteDoc(ref);
+  const miembros = await getDocs(query(col("inscripciones"), where("paqueteMusifamiliarId", "==", paqueteId)));
+  const batch = writeBatch(_db);
+  miembros.docs.forEach((m) => batch.delete(m.ref));
+  await batch.commit();
 }
 
 /* =========================================================
