@@ -500,6 +500,9 @@ async function renderEstudiantes() {
       "Documentos asociados": asocs.map((a) => a.documento).filter(Boolean).join(" / "),
       Parentesco: asocs.map((a) => a.parentesco).filter(Boolean).join(" / "),
       Telefono: asocs.map((a) => a.telefono).filter(Boolean).join(" / "),
+      "Continuidad asociados": asocs.map((a) => a.continuidad || "Pendiente").join(" / "),
+      "Motivo de no continuidad": asocs.map((a) => a.motivoNoContinuidad).filter(Boolean).join(" / "),
+      "Notas asociados": asocs.map((a) => a.notas).filter(Boolean).join(" / "),
       Estado: e.activo === false ? "inactivo" : "activo",
       Inscripciones: state.inscripciones.filter((i) => i.estudianteId === e.id).length
     };
@@ -515,11 +518,17 @@ async function renderEstudiantes() {
         : "—";
       const parentCell = asocs.length ? asocs.map((a) => esc(a.parentesco || "—")).join("<br>") : "—";
       const telCell = asocs.length ? asocs.map((a) => esc(a.telefono || "—")).join("<br>") : "—";
+      const continuidadCell = asocs.length ? asocs.map((a) => {
+        const continuidad = a.continuidad || "Pendiente";
+        const clase = continuidad === "Continúa" ? "green" : continuidad === "No continúa" ? "gray" : "amber";
+        return `<span class="pill ${clase}">${esc(continuidad)}</span>${a.motivoNoContinuidad ? `<br><span class="muted sm">${esc(a.motivoNoContinuidad)}</span>` : ""}`;
+      }).join("<br>") : "—";
       return `<tr>
         <td><strong>${esc(e.nombre)}</strong></td>
         <td>${asocCell}</td>
         <td>${parentCell}</td>
         <td>${telCell}</td>
+        <td>${continuidadCell}</td>
         <td>${insN}</td>
         <td><span class="pill ${e.activo === false ? "gray" : "green"}">${e.activo === false ? "inactivo" : "activo"}</span></td>
         <td class="row-actions">
@@ -527,9 +536,9 @@ async function renderEstudiantes() {
           <button class="link-btn" data-edit="${e.id}">Editar</button>
           <button class="link-btn danger" data-del="${e.id}">Eliminar</button>`)}
         </td></tr>`;
-    }).join("") || `<tr><td colspan="7" class="muted">Sin estudiantes.</td></tr>`;
+    }).join("") || `<tr><td colspan="8" class="muted">Sin estudiantes.</td></tr>`;
     content.innerHTML = `<section class="panel"><table class="data-table">
-      <thead><tr><th>Estudiante</th><th>Asociado</th><th>Parentesco</th><th>Teléfono</th><th>Inscrip.</th><th>Estado</th><th></th></tr></thead>
+      <thead><tr><th>Estudiante</th><th>Asociado</th><th>Parentesco</th><th>Teléfono</th><th>Seguimiento</th><th>Inscrip.</th><th>Estado</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></section>`;
     content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => formEstudiante(state.estudiantes.find((x) => x.id === b.dataset.edit)));
     content.querySelectorAll("[data-hist]").forEach((b) => b.onclick = () => verHistorial(b.dataset.hist));
@@ -625,6 +634,15 @@ function formEstudiante(s = null) {
         <label class="field"><span>Parentesco</span><input class="a-parentesco" placeholder="Papá, Mamá, cónyuge…" value="${esc(a.parentesco || "")}"></label>
         <label class="field"><span>Teléfono</span><input class="a-tel" value="${esc(a.telefono || "")}"></label>
       </div>
+      <div class="grid-2">
+        <label class="field"><span>¿Continúa en el convenio?</span>
+          <select class="a-continuidad">
+            ${["Pendiente", "Continúa", "No continúa"].map((estado) => `<option value="${estado}" ${(a.continuidad || "Pendiente") === estado ? "selected" : ""}>${estado}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field a-motivo-wrap"><span>¿Por qué no continúa?</span><input class="a-motivo" placeholder="Motivo informado por el asociado" value="${esc(a.motivoNoContinuidad || "")}"></label>
+      </div>
+      <label class="field"><span>Notas de seguimiento</span><textarea class="a-notas" placeholder="Llamadas, acuerdos, fechas o próximos pasos…">${esc(a.notas || "")}</textarea></label>
       <button type="button" class="link-btn danger a-del">Quitar asociado</button>
     </div>`;
   openModal(s ? "Editar estudiante" : "Nuevo estudiante", `
@@ -645,12 +663,25 @@ function formEstudiante(s = null) {
       </label>
       <div class="form-row"><button class="btn primary" type="submit">Guardar</button></div>
     </form>`);
-  const bindDel = () => $("#asocList").querySelectorAll(".a-del").forEach((b) => b.onclick = () => {
-    if ($("#asocList").querySelectorAll(".asoc-row").length > 1) b.closest(".asoc-row").remove();
-    else toast("Debe quedar al menos un asociado (puede dejarse vacío).", "info");
+  const bindAsocRows = () => $("#asocList").querySelectorAll(".asoc-row").forEach((row) => {
+    const continuidad = $(".a-continuidad", row);
+    const motivoWrap = $(".a-motivo-wrap", row);
+    const motivo = $(".a-motivo", row);
+    const actualizarMotivo = (limpiar = false) => {
+      const noContinua = continuidad.value === "No continúa";
+      motivoWrap.hidden = !noContinua;
+      motivo.required = noContinua;
+      if (!noContinua && limpiar) motivo.value = "";
+    };
+    continuidad.onchange = () => actualizarMotivo(true);
+    actualizarMotivo();
+    $(".a-del", row).onclick = () => {
+      if ($("#asocList").querySelectorAll(".asoc-row").length > 1) row.remove();
+      else toast("Debe quedar al menos un asociado (puede dejarse vacío).", "info");
+    };
   });
-  bindDel();
-  $("#addAsoc").onclick = () => { $("#asocList").insertAdjacentHTML("beforeend", filaAsoc()); bindDel(); };
+  bindAsocRows();
+  $("#addAsoc").onclick = () => { $("#asocList").insertAdjacentHTML("beforeend", filaAsoc()); bindAsocRows(); };
   $("#f").onsubmit = async (e) => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
@@ -660,7 +691,10 @@ function formEstudiante(s = null) {
       nombre: row.querySelector(".a-nombre").value.trim(),
       documento: row.querySelector(".a-doc").value.trim(),
       parentesco: row.querySelector(".a-parentesco").value.trim(),
-      telefono: row.querySelector(".a-tel").value.trim()
+      telefono: row.querySelector(".a-tel").value.trim(),
+      continuidad: row.querySelector(".a-continuidad").value,
+      motivoNoContinuidad: row.querySelector(".a-motivo").value.trim(),
+      notas: row.querySelector(".a-notas").value.trim()
     })).filter((a) => a.nombre || a.documento));
     const principal = asociados[0] || {};
     fd.asociados = asociados;
@@ -682,7 +716,7 @@ async function verHistorial(estId) {
     <div class="panel" style="padding:.6rem .8rem;margin-bottom:12px">
       <strong>Asociados que inscriben a ${esc(est?.nombre || "")}:</strong>
       <ul style="margin:.4rem 0 0;padding-left:1.1rem">
-        ${asocs.map((a) => `<li>${esc(a.nombre || "—")}${a.parentesco ? ` — ${esc(a.parentesco)}` : ""}${a.documento ? ` <span class="muted">(doc. ${esc(a.documento)})</span>` : ""}</li>`).join("")}
+        ${asocs.map((a) => `<li><strong>${esc(a.nombre || "—")}</strong>${a.parentesco ? ` — ${esc(a.parentesco)}` : ""}${a.documento ? ` <span class="muted">(doc. ${esc(a.documento)})</span>` : ""}<br><span class="muted">Seguimiento: ${esc(a.continuidad || "Pendiente")}${a.motivoNoContinuidad ? ` · Motivo: ${esc(a.motivoNoContinuidad)}` : ""}${a.notas ? ` · Notas: ${esc(a.notas)}` : ""}</span></li>`).join("")}
       </ul>
     </div>` : "";
   const rows = ins.map((i) => `<tr><td>${esc(cicloNombre(i.cicloId))}</td><td>${esc(i.mes || "—")}</td><td>${esc(i.servicio || i.modalidad || "—")}</td><td>${esc(i.asociadoNombre || "—")}</td><td>${formatCOP(i.precio)}</td><td>${esc(i.estado || "—")}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Sin inscripciones registradas.</td></tr>`;
