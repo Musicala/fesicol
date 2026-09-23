@@ -84,6 +84,17 @@ function monthISO() { return new Date().toISOString().slice(0, 7); }
 function esMusifamiliar(servicio) { return /musifamiliar/i.test(String(servicio || "")); }
 function precioFacturable(i) { return i.paqueteMusifamiliarId && !i.beneficiarioPrincipal ? 0 : (i.precio || 0); }
 function etiquetaPaquete(i) { return i.paqueteMusifamiliarId ? '<span class="pill amber">Paquete compartido</span>' : ""; }
+function nombreServicio(i) {
+  const servicio = String(i?.servicio || "").trim();
+  if (/[a-záéíóúñ]/i.test(servicio)) return servicio;
+  const modalidad = String(i?.modalidad || "").trim();
+  if (/[a-záéíóúñ]/i.test(modalidad)) return modalidad;
+  const valor = parsePrice(servicio || i?.precio || i?.valor);
+  const duracion = String(i?.duracion || "").trim().toLowerCase();
+  const candidatas = state.tarifas.filter((t) => parsePrice(t.precio) === valor);
+  const tarifa = candidatas.find((t) => !duracion || String(t.servicio || "").toLowerCase().includes(duracion)) || candidatas[0];
+  return tarifa?.servicio || "Servicio sin nombre registrado";
+}
 function beneficiariosPaquete(i) {
   if (!i) return [];
   return i.paqueteMusifamiliarId
@@ -1028,7 +1039,7 @@ function formInscripcion(i = null) {
   const estOpts = state.estudiantes.map((e) => `<option value="${e.id}" ${i?.estudianteId === e.id ? "selected" : ""}>${esc(e.nombre)}</option>`).join("");
   const miembrosActuales = new Set(beneficiariosPaquete(i).map((x) => x.estudianteId));
   const cicloOpts = state.ciclos.map((c) => `<option value="${c.id}" ${i?.cicloId === c.id ? "selected" : ""}>${esc(c.nombre)}</option>`).join("");
-  const tarifaOpts = state.tarifas.map((t) => `<option value="${t.precio}" ${i?.servicio === t.servicio ? "selected" : ""} data-serv="${esc(t.servicio)}">${esc(t.servicio)} — ${formatCOP(t.precio)}</option>`).join("");
+  const tarifaOpts = state.tarifas.map((t) => `<option value="${esc(t.servicio)}" ${nombreServicio(i) === t.servicio ? "selected" : ""} data-precio="${t.precio}">${esc(t.servicio)} — ${formatCOP(t.precio)}</option>`).join("");
   openModal(i ? "Editar inscripción" : "Nueva inscripción", `
     <form id="f" class="form">
       <div class="grid-2">
@@ -1061,14 +1072,14 @@ function formInscripcion(i = null) {
     </form>`);
   const servSel = $("#servSel");
   const actualizarMusifamiliar = () => {
-    const activo = esMusifamiliar(servSel.selectedOptions[0]?.dataset.serv || servSel.value || i?.servicio);
+    const activo = esMusifamiliar(servSel.value || i?.servicio);
     $("#musifamiliarBox").hidden = !activo;
   };
   servSel.onchange = () => {
     const opt = servSel.selectedOptions[0];
     if (opt?.value) {
-      $("#precioInp").value = opt.value;
-      const serv = opt.dataset.serv || "";
+      $("#precioInp").value = opt.dataset.precio || "";
+      const serv = opt.value || "";
       // Intenta derivar modalidad/duración del nombre del servicio
       const f = $("#f");
       if (!f.modalidad.value) f.modalidad.value = serv.split(" Paquete")[0].split(" 1 mes")[0];
@@ -1094,7 +1105,7 @@ function formInscripcion(i = null) {
     fd.precio = parsePrice(fd.precio);
     fd.estudianteNombre = estudianteNombre(fd.estudianteId);
     fd.asociadoNombre = asocSel.selectedOptions[0]?.dataset.nombre || "";
-    if (esMusifamiliar(servSel.selectedOptions[0]?.dataset.serv || fd.servicio)) {
+    if (esMusifamiliar(fd.servicio)) {
       const ids = [fd.estudianteId, ...$$("#beneficiariosList input:checked").map((x) => x.value)];
       await DB.savePaqueteMusifamiliar(fd, ids, i?.paqueteMusifamiliarId || null);
     } else {
@@ -1133,8 +1144,8 @@ function prepararDatosFacturacion(periodo = "") {
         documentoAsociado: asociadoResponsable.documento || "", telefonoAsociado: asociadoResponsable.telefono || "",
         estudiante: estudiante?.nombre || i.estudianteNombre || "Sin estudiante", beneficiarios: beneficiarios.join(" / "),
         todosLosAsociados: asociados.map((a) => [a.nombre, a.documento ? `doc. ${a.documento}` : "", a.telefono].filter(Boolean).join(" · ")).join(" / "),
-        servicio: i.servicio || "", modalidad: i.modalidad || "", duracion: i.duracion || "", estado: i.estado || "", valor,
-        desglose: `${estudiante?.nombre || i.estudianteNombre || "Sin estudiante"}: ${i.servicio || i.modalidad || "Servicio"}${i.duracion ? ` (${i.duracion})` : ""}${i.paqueteMusifamiliarId ? ` · Beneficiarios: ${beneficiarios.join(", ")}` : ""}`
+        servicio: nombreServicio(i), modalidad: i.modalidad || "", duracion: i.duracion || "", estado: i.estado || "", valor,
+        desglose: `${estudiante?.nombre || i.estudianteNombre || "Sin estudiante"}: ${nombreServicio(i)}${i.duracion ? ` (${i.duracion})` : ""}${i.paqueteMusifamiliarId ? ` · Beneficiarios: ${beneficiarios.join(", ")}` : ""}`
       };
       grupos.get(key).items.push(item);
       grupos.get(key).total += valor;
@@ -1191,7 +1202,7 @@ function estadoPreFacturaPill(estado) {
 function verDatosPreviosFactura(p) {
   const detalle = (p.items || []).map((i) => `<tr>
     <td>${esc(i.estudiante || "—")}</td><td>${esc(i.beneficiarios || "—")}</td>
-    <td>${esc(i.servicio || i.modalidad || "—")}</td><td>${esc(i.duracion || "—")}</td><td>${formatCOP(i.valor)}</td>
+    <td>${esc(nombreServicio(i))}</td><td>${esc(i.duracion || "—")}</td><td>${formatCOP(i.valor)}</td>
   </tr>`).join("") || `<tr><td colspan="5" class="muted">Sin detalle guardado.</td></tr>`;
   openModal(`Datos previos · ${p.asociado || ""}`, `
     <div class="alert info"><strong>Estado:</strong> <span class="pill ${estadoPreFacturaPill(p.estado)}">${esc(p.estado || "Pendiente de revisión")}</span></div>
@@ -1226,7 +1237,7 @@ async function renderFacturacion() {
   const previas = state.preFacturas.slice().sort((a, b) => String(b.periodo || "").localeCompare(String(a.periodo || "")) || String(a.asociado || "").localeCompare(String(b.asociado || "")));
   const totalPrevias = previas.reduce((suma, p) => suma + (Number(p.total) || 0), 0);
   const previasRows = previas.map((p) => {
-    const servicios = [...new Set((p.items || []).map((i) => i.servicio || i.modalidad).filter(Boolean))];
+    const servicios = [...new Set((p.items || []).map((i) => nombreServicio(i)).filter(Boolean))];
     return `<tr>
     <td><strong>${esc(p.asociado || "—")}</strong><br><span class="muted sm">doc. ${esc(p.documento || "sin registrar")}</span></td>
     <td>${esc(p.periodo || "—")}</td><td>${servicios.length ? servicios.map(esc).join("<br>") : "—"}</td><td>${(p.items || []).length}</td><td><strong>${formatCOP(p.total)}</strong></td>
