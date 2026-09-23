@@ -55,6 +55,7 @@ const state = {
   contactos: [],
   inscripciones: [],
   facturas: [],
+  preFacturas: [],
   tarifas: [],
   usuarios: []
 };
@@ -202,10 +203,10 @@ function defaultCiclos() {
    Carga de datos
 ========================================================= */
 async function loadAll() {
-  const [ciclos, estudiantes, contactos, inscripciones, facturas, tarifas] = await Promise.all([
-    DB.getCiclos(), DB.getEstudiantes(), DB.getContactos(), DB.getInscripciones(), DB.getFacturas(), DB.getTarifas()
+  const [ciclos, estudiantes, contactos, inscripciones, facturas, preFacturas, tarifas] = await Promise.all([
+    DB.getCiclos(), DB.getEstudiantes(), DB.getContactos(), DB.getInscripciones(), DB.getFacturas(), DB.getPreFacturas(), DB.getTarifas()
   ]);
-  Object.assign(state, { ciclos, estudiantes, contactos, inscripciones, facturas, tarifas });
+  Object.assign(state, { ciclos, estudiantes, contactos, inscripciones, facturas, preFacturas, tarifas });
 }
 
 function cicloNombre(id) {
@@ -1119,6 +1120,7 @@ function prepararDatosFacturacion(periodo = "") {
       const asociadoKey = asociadoResponsable.documento || asociadoResponsable.nombre || `sin-asociado-${i.estudianteId || i.id}`;
       const key = `${i.mes || "sin-periodo"}::${asociadoKey}`;
       if (!grupos.has(key)) grupos.set(key, {
+        id: encodeURIComponent(key),
         periodo: i.mes || "Sin período", asociado: asociadoResponsable.nombre || "Sin asociado asignado",
         documento: asociadoResponsable.documento || "", telefono: asociadoResponsable.telefono || "", items: [], total: 0
       });
@@ -1145,47 +1147,16 @@ function prepararDatosFacturacion(periodo = "") {
   return { salidas, detalle };
 }
 
-async function copiarDatosFacturacion(salidas) {
-  const texto = salidas.map((g, index) => [
-    `FACTURACIÓN ${index + 1}`,
-    `Período: ${g.periodo}`,
-    `Asociado: ${g.asociado}`,
-    `Documento: ${g.documento || "Sin registrar"}`,
-    `Teléfono: ${g.telefono || "Sin registrar"}`,
-    "Desglose:", g.desglose,
-    `TOTAL: ${formatCOP(g.total)}`
-  ].join("\n")).join("\n\n--------------------\n\n");
-  try {
-    await navigator.clipboard.writeText(texto);
-    toast("Datos copiados. Ya puedes pegarlos en el otro programa ✅", "success");
-  } catch (err) {
-    console.error(err);
-    toast("No fue posible copiar automáticamente. Descarga el Excel.", "error", 5000);
-  }
-}
-
-async function descargarDatosFacturacion(salidas, detalle) {
+async function guardarDatosPrevios(salidas) {
   if (!salidas.length) return;
-  setLoading(true, "Preparando Excel…");
   try {
-    const XLSX = await loadXLSX();
-    const resumen = salidas.map((g) => ({
-      Período: g.periodo, Asociado: g.asociado, Documento: g.documento, Teléfono: g.telefono,
-      Total: g.total, Desglose: g.desglose
-    }));
-    const detalleExcel = detalle.map((i) => ({
-      Período: i.periodo, Asociado: i.asociado, "Documento asociado": i.documentoAsociado,
-      "Teléfono asociado": i.telefonoAsociado, Estudiante: i.estudiante, Beneficiarios: i.beneficiarios,
-      "Todos los asociados": i.todosLosAsociados, Servicio: i.servicio, Modalidad: i.modalidad,
-      Duración: i.duracion, Estado: i.estado, Valor: i.valor, Desglose: i.desglose
-    }));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), "Listo para facturar");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalleExcel), "Desglose");
-    XLSX.writeFile(wb, "datos-para-facturacion-fesicol.xlsx");
-    toast("Excel de facturación preparado ✅", "success");
+    setLoading(true, "Guardando datos previos…");
+    await DB.savePreFacturas(salidas.map((g) => ({ ...g, estado: "Pendiente de revisión" })));
+    closeModal();
+    await refresh();
+    toast("Datos previos guardados para revisión ✅", "success");
   } catch (err) {
-    console.error(err); toast("Error preparando el Excel: " + (err?.message || err), "error", 5000);
+    console.error(err); toast("Error guardando los datos: " + (err?.message || err), "error", 5000);
   } finally { setLoading(false); }
 }
 
@@ -1200,18 +1171,46 @@ function modalDatosFacturacion() {
       <div id="datosFacturacionPreview"></div>
     </div>`);
   const actualizar = () => {
-    const { salidas, detalle } = prepararDatosFacturacion($("#periodoFacturacion").value);
+    const { salidas } = prepararDatosFacturacion($("#periodoFacturacion").value);
     const total = salidas.reduce((suma, g) => suma + g.total, 0);
     $("#datosFacturacionPreview").innerHTML = !salidas.length
       ? `<div class="alert info">No hay inscripciones facturables para este período.</div>`
-      : `<div class="alert ok"><strong>${salidas.length} cuenta(s) preparada(s):</strong> ${formatCOP(total)} en total.</div>
-        <div class="form-row"><button type="button" class="btn secondary" id="copyDatosFacturacion">Copiar datos</button><button type="button" class="btn primary" id="downloadDatosFacturacion">⬇ Descargar Excel</button></div>
+      : `<div class="alert ok"><strong>${salidas.length} dato(s) previo(s) preparado(s):</strong> ${formatCOP(total)} en total.</div>
+        <div class="form-row">${adminOnly(`<button type="button" class="btn primary" id="saveDatosFacturacion">Guardar como datos previos</button>`)}</div>
         <section class="panel" style="padding:.75rem;max-height:320px;overflow:auto">${salidas.map((g) => `<div style="padding:.55rem 0;border-bottom:1px solid rgba(17,24,39,.09)"><strong>${esc(g.asociado)}</strong> <span class="muted">· doc. ${esc(g.documento || "sin registrar")} · ${esc(g.periodo)}</span><br><span class="muted sm">${esc(g.desglose).replace(/\n/g, "<br>")}</span><br><strong>Total: ${formatCOP(g.total)}</strong></div>`).join("")}</section>`;
-    $("#copyDatosFacturacion") && ($("#copyDatosFacturacion").onclick = () => copiarDatosFacturacion(salidas));
-    $("#downloadDatosFacturacion") && ($("#downloadDatosFacturacion").onclick = () => descargarDatosFacturacion(salidas, detalle));
+    $("#saveDatosFacturacion") && ($("#saveDatosFacturacion").onclick = () => guardarDatosPrevios(salidas));
   };
   $("#periodoFacturacion").onchange = actualizar;
   actualizar();
+}
+
+function estadoPreFacturaPill(estado) {
+  return estado === "Confirmado" ? "green" : estado === "Registrado externamente" ? "blue" : "amber";
+}
+
+function verDatosPreviosFactura(p) {
+  const detalle = (p.items || []).map((i) => `<tr>
+    <td>${esc(i.estudiante || "—")}</td><td>${esc(i.beneficiarios || "—")}</td>
+    <td>${esc(i.servicio || i.modalidad || "—")}</td><td>${esc(i.duracion || "—")}</td><td>${formatCOP(i.valor)}</td>
+  </tr>`).join("") || `<tr><td colspan="5" class="muted">Sin detalle guardado.</td></tr>`;
+  openModal(`Datos previos · ${p.asociado || ""}`, `
+    <div class="alert info"><strong>Estado:</strong> <span class="pill ${estadoPreFacturaPill(p.estado)}">${esc(p.estado || "Pendiente de revisión")}</span></div>
+    <div class="grid-2" style="margin-bottom:12px">
+      <div><strong>Asociado que factura</strong><br>${esc(p.asociado || "—")}</div>
+      <div><strong>Documento / teléfono</strong><br>${esc(p.documento || "Sin registrar")} · ${esc(p.telefono || "Sin registrar")}</div>
+      <div><strong>Período</strong><br>${esc(p.periodo || "—")}</div>
+      <div><strong>Total a registrar</strong><br>${formatCOP(p.total)}</div>
+    </div>
+    <section class="panel" style="padding:.75rem"><table class="data-table"><thead><tr><th>Estudiante</th><th>Beneficiarios</th><th>Servicio</th><th>Duración</th><th>Valor</th></tr></thead><tbody>${detalle}</tbody></table></section>
+    <p class="muted sm" style="margin-top:12px">Estos datos quedan guardados aquí como paso previo; registrar la factura en el otro programa no modifica este detalle.</p>
+    <div class="form-row">${adminOnly(`${p.estado !== "Confirmado" ? `<button type="button" class="btn primary" id="confirmPreFactura">Confirmar datos</button>` : ""}${p.estado !== "Registrado externamente" ? `<button type="button" class="btn secondary" id="externalPreFactura">Marcar como registrado externamente</button>` : ""}`)}</div>`);
+  $("#confirmPreFactura") && ($("#confirmPreFactura").onclick = async () => {
+    await DB.updatePreFacturaEstado(p.id, "Confirmado"); closeModal(); await refresh(); toast("Datos confirmados ✅", "success");
+  });
+  $("#externalPreFactura") && ($("#externalPreFactura").onclick = async () => {
+    if (!confirm("¿Ya registraste esta factura en el otro programa?")) return;
+    await DB.updatePreFacturaEstado(p.id, "Registrado externamente"); closeModal(); await refresh(); toast("Marcado como registrado externamente ✅", "success");
+  });
 }
 
 async function renderFacturacion() {
@@ -1224,6 +1223,13 @@ async function renderFacturacion() {
   })), "facturacion-fesicol.xlsx", "Facturacion");
 
   const total = state.facturas.reduce((a, b) => a + (b.valor || 0), 0);
+  const previas = state.preFacturas.slice().sort((a, b) => String(b.periodo || "").localeCompare(String(a.periodo || "")) || String(a.asociado || "").localeCompare(String(b.asociado || "")));
+  const previasRows = previas.map((p) => `<tr>
+    <td><strong>${esc(p.asociado || "—")}</strong><br><span class="muted sm">doc. ${esc(p.documento || "sin registrar")}</span></td>
+    <td>${esc(p.periodo || "—")}</td><td>${(p.items || []).length}</td><td>${formatCOP(p.total)}</td>
+    <td><span class="pill ${estadoPreFacturaPill(p.estado)}">${esc(p.estado || "Pendiente de revisión")}</span></td>
+    <td class="row-actions"><button class="link-btn" data-ver-previa="${esc(p.id)}">Ver y confirmar</button></td>
+  </tr>`).join("") || `<tr><td colspan="6" class="muted">Aún no hay datos previos guardados. Usa “Preparar datos” para revisar y guardarlos.</td></tr>`;
   const rows = state.facturas.map((f) => `<tr>
       <td>${f.archivoUrl ? `<a href="${esc(f.archivoUrl)}" target="_blank" rel="noopener">${esc(f.nombre || "Documento")}</a>` : esc(f.nombre || "—")}</td>
       <td>${esc(f.tipo || "—")}</td>
@@ -1237,9 +1243,13 @@ async function renderFacturacion() {
 
   content.innerHTML = `
     <div class="alert info"><strong>Total facturado registrado:</strong> ${formatCOP(total)}</div>
+    <section class="panel" style="margin-bottom:16px"><div style="padding:0 0 .7rem"><h3 style="margin:0">Datos previos a factura</h3><p class="muted sm" style="margin:.25rem 0 0">Información guardada para revisar antes de registrarla en el sistema externo.</p></div>
+      <table class="data-table"><thead><tr><th>Asociado</th><th>Período</th><th>Ítems</th><th>Total</th><th>Estado</th><th></th></tr></thead><tbody>${previasRows}</tbody></table>
+    </section>
     <section class="panel"><table class="data-table">
     <thead><tr><th>Documento</th><th>Tipo</th><th>Periodo</th><th>Valor</th><th>Estado</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table></section>`;
+  content.querySelectorAll("[data-ver-previa]").forEach((b) => b.onclick = () => verDatosPreviosFactura(state.preFacturas.find((p) => p.id === b.dataset.verPrevia)));
   content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => formFactura(state.facturas.find((x) => x.id === b.dataset.edit)));
   content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
     if (!confirm("¿Eliminar documento?")) return;

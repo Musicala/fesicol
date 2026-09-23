@@ -7,6 +7,7 @@
      estudiantes   → inscritos (historial / seguimiento)
      inscripciones → inscripción de un estudiante en un ciclo
      planillas     → envíos mensuales de FESICOL
+     preFacturas    → datos revisables previos a la factura externa
      facturas      → facturación, cuentas de cobro y soportes
      tarifas       → precios 2026 por servicio
 ========================================================= */
@@ -420,6 +421,33 @@ export async function saveFactura(data, id = null) {
 
 export async function deleteFactura(id) {
   await deleteDoc(doc(_db, "facturas", id));
+}
+
+/* =========================================================
+   PRE-FACTURAS  (datos revisados antes del sistema externo)
+========================================================= */
+export async function getPreFacturas() {
+  const qs = await getDocs(col("preFacturas"));
+  return mapSnap(qs);
+}
+
+export async function savePreFacturas(items = []) {
+  const batch = writeBatch(_db);
+  for (const item of items) {
+    const ref = doc(_db, "preFacturas", item.id);
+    const previo = await getDoc(ref);
+    batch.set(ref, {
+      ...item,
+      estado: previo.exists() ? (previo.data().estado || item.estado) : (item.estado || "Pendiente de revisión"),
+      updatedAt: serverTimestamp(),
+      ...(previo.exists() ? {} : { createdAt: serverTimestamp() })
+    }, { merge: true });
+  }
+  await batch.commit();
+}
+
+export async function updatePreFacturaEstado(id, estado) {
+  await updateDoc(doc(_db, "preFacturas", id), { estado, updatedAt: serverTimestamp() });
 }
 
 /* =========================================================
