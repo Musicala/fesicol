@@ -1224,12 +1224,16 @@ async function renderFacturacion() {
 
   const total = state.facturas.reduce((a, b) => a + (b.valor || 0), 0);
   const previas = state.preFacturas.slice().sort((a, b) => String(b.periodo || "").localeCompare(String(a.periodo || "")) || String(a.asociado || "").localeCompare(String(b.asociado || "")));
-  const previasRows = previas.map((p) => `<tr>
+  const totalPrevias = previas.reduce((suma, p) => suma + (Number(p.total) || 0), 0);
+  const previasRows = previas.map((p) => {
+    const servicios = [...new Set((p.items || []).map((i) => i.servicio || i.modalidad).filter(Boolean))];
+    return `<tr>
     <td><strong>${esc(p.asociado || "—")}</strong><br><span class="muted sm">doc. ${esc(p.documento || "sin registrar")}</span></td>
-    <td>${esc(p.periodo || "—")}</td><td>${(p.items || []).length}</td><td>${formatCOP(p.total)}</td>
+    <td>${esc(p.periodo || "—")}</td><td>${servicios.length ? servicios.map(esc).join("<br>") : "—"}</td><td>${(p.items || []).length}</td><td><strong>${formatCOP(p.total)}</strong></td>
     <td><span class="pill ${estadoPreFacturaPill(p.estado)}">${esc(p.estado || "Pendiente de revisión")}</span></td>
     <td class="row-actions"><button class="link-btn" data-ver-previa="${esc(p.id)}">Ver y confirmar</button></td>
-  </tr>`).join("") || `<tr><td colspan="6" class="muted">Aún no hay datos previos guardados. Usa “Preparar datos” para revisar y guardarlos.</td></tr>`;
+  </tr>`;
+  }).join("") || `<tr><td colspan="7" class="muted">Aún no hay datos previos guardados. Usa “Preparar datos” para revisar y guardarlos.</td></tr>`;
   const rows = state.facturas.map((f) => `<tr>
       <td>${f.archivoUrl ? `<a href="${esc(f.archivoUrl)}" target="_blank" rel="noopener">${esc(f.nombre || "Documento")}</a>` : esc(f.nombre || "—")}</td>
       <td>${esc(f.tipo || "—")}</td>
@@ -1243,8 +1247,8 @@ async function renderFacturacion() {
 
   content.innerHTML = `
     <div class="alert info"><strong>Total facturado registrado:</strong> ${formatCOP(total)}</div>
-    <section class="panel" style="margin-bottom:16px"><div style="padding:0 0 .7rem"><h3 style="margin:0">Datos previos a factura</h3><p class="muted sm" style="margin:.25rem 0 0">Información guardada para revisar antes de registrarla en el sistema externo.</p></div>
-      <table class="data-table"><thead><tr><th>Asociado</th><th>Período</th><th>Ítems</th><th>Total</th><th>Estado</th><th></th></tr></thead><tbody>${previasRows}</tbody></table>
+    <section class="panel" style="margin-bottom:16px"><div style="padding:0 0 .7rem"><h3 style="margin:0">Datos previos a factura</h3><p class="muted sm" style="margin:.25rem 0 0">Información guardada para revisar antes de registrarla en el sistema externo.</p><p style="margin:.6rem 0 0"><strong>Total de las facturas previas:</strong> ${formatCOP(totalPrevias)}</p></div>
+      <table class="data-table"><thead><tr><th>Asociado</th><th>Período</th><th>Servicio(s) adquirido(s)</th><th>Ítems</th><th>Total factura</th><th>Estado</th><th></th></tr></thead><tbody>${previasRows}</tbody></table>
     </section>
     <section class="panel"><table class="data-table">
     <thead><tr><th>Documento</th><th>Tipo</th><th>Periodo</th><th>Valor</th><th>Estado</th><th></th></tr></thead>
