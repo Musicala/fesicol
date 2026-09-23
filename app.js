@@ -1144,7 +1144,7 @@ function prepararDatosFacturacion(periodo = "") {
         documentoAsociado: asociadoResponsable.documento || "", telefonoAsociado: asociadoResponsable.telefono || "",
         estudiante: estudiante?.nombre || i.estudianteNombre || "Sin estudiante", beneficiarios: beneficiarios.join(" / "),
         todosLosAsociados: asociados.map((a) => [a.nombre, a.documento ? `doc. ${a.documento}` : "", a.telefono].filter(Boolean).join(" · ")).join(" / "),
-        servicio: nombreServicio(i), modalidad: i.modalidad || "", duracion: i.duracion || "", estado: i.estado || "", valor,
+        cicloId: i.cicloId || "", ciclo: cicloNombre(i.cicloId), servicio: nombreServicio(i), modalidad: i.modalidad || "", duracion: i.duracion || "", estado: i.estado || "", valor,
         desglose: `${estudiante?.nombre || i.estudianteNombre || "Sin estudiante"}: ${nombreServicio(i)}${i.duracion ? ` (${i.duracion})` : ""}${i.paqueteMusifamiliarId ? ` · Beneficiarios: ${beneficiarios.join(", ")}` : ""}`
       };
       grupos.get(key).items.push(item);
@@ -1199,20 +1199,34 @@ function estadoPreFacturaPill(estado) {
   return estado === "Confirmado" ? "green" : estado === "Registrado externamente" ? "blue" : "amber";
 }
 
+function ciclosDePreFactura(p) {
+  const desdeDetalle = (p.items || []).map((i) => i.ciclo || cicloNombre(i.cicloId)).filter((c) => c && c !== "—");
+  if (desdeDetalle.length) return [...new Set(desdeDetalle)];
+  return [...new Set(state.inscripciones
+    .filter((i) => i.mes === p.periodo && (
+      (p.documento && i.asociadoDocumento === p.documento) ||
+      (!p.documento && i.asociadoNombre === p.asociado)
+    ))
+    .map((i) => cicloNombre(i.cicloId))
+    .filter((c) => c && c !== "—"))];
+}
+
 function verDatosPreviosFactura(p) {
+  const ciclos = ciclosDePreFactura(p);
   const detalle = (p.items || []).map((i) => `<tr>
     <td>${esc(i.estudiante || "—")}</td><td>${esc(i.beneficiarios || "—")}</td>
-    <td>${esc(nombreServicio(i))}</td><td>${esc(i.duracion || "—")}</td><td>${formatCOP(i.valor)}</td>
-  </tr>`).join("") || `<tr><td colspan="5" class="muted">Sin detalle guardado.</td></tr>`;
+    <td>${esc(i.ciclo || cicloNombre(i.cicloId))}</td><td>${esc(nombreServicio(i))}</td><td>${esc(i.duracion || "—")}</td><td>${formatCOP(i.valor)}</td>
+  </tr>`).join("") || `<tr><td colspan="6" class="muted">Sin detalle guardado.</td></tr>`;
   openModal(`Datos previos · ${p.asociado || ""}`, `
     <div class="alert info"><strong>Estado:</strong> <span class="pill ${estadoPreFacturaPill(p.estado)}">${esc(p.estado || "Pendiente de revisión")}</span></div>
     <div class="grid-2" style="margin-bottom:12px">
       <div><strong>Asociado que factura</strong><br>${esc(p.asociado || "—")}</div>
       <div><strong>Documento / teléfono</strong><br>${esc(p.documento || "Sin registrar")} · ${esc(p.telefono || "Sin registrar")}</div>
       <div><strong>Período</strong><br>${esc(p.periodo || "—")}</div>
+      <div><strong>Ciclo</strong><br>${esc(ciclos.join(" / ") || "Sin ciclo registrado")}</div>
       <div><strong>Total a registrar</strong><br>${formatCOP(p.total)}</div>
     </div>
-    <section class="panel" style="padding:.75rem"><table class="data-table"><thead><tr><th>Estudiante</th><th>Beneficiarios</th><th>Servicio</th><th>Duración</th><th>Valor</th></tr></thead><tbody>${detalle}</tbody></table></section>
+    <section class="panel" style="padding:.75rem"><table class="data-table"><thead><tr><th>Estudiante</th><th>Beneficiarios</th><th>Ciclo</th><th>Servicio</th><th>Duración</th><th>Valor</th></tr></thead><tbody>${detalle}</tbody></table></section>
     <p class="muted sm" style="margin-top:12px">Estos datos quedan guardados aquí como paso previo; registrar la factura en el otro programa no modifica este detalle.</p>
     <div class="form-row">${adminOnly(`${p.estado !== "Confirmado" ? `<button type="button" class="btn primary" id="confirmPreFactura">Confirmar datos</button>` : ""}${p.estado !== "Registrado externamente" ? `<button type="button" class="btn secondary" id="externalPreFactura">Marcar como registrado externamente</button>` : ""}`)}</div>`);
   $("#confirmPreFactura") && ($("#confirmPreFactura").onclick = async () => {
@@ -1238,13 +1252,14 @@ async function renderFacturacion() {
   const totalPrevias = previas.reduce((suma, p) => suma + (Number(p.total) || 0), 0);
   const previasRows = previas.map((p) => {
     const servicios = [...new Set((p.items || []).map((i) => nombreServicio(i)).filter(Boolean))];
+    const ciclos = ciclosDePreFactura(p);
     return `<tr>
     <td><strong>${esc(p.asociado || "—")}</strong><br><span class="muted sm">doc. ${esc(p.documento || "sin registrar")}</span></td>
-    <td>${esc(p.periodo || "—")}</td><td>${servicios.length ? servicios.map(esc).join("<br>") : "—"}</td><td>${(p.items || []).length}</td><td><strong>${formatCOP(p.total)}</strong></td>
+    <td>${esc(p.periodo || "—")}</td><td>${esc(ciclos.join(" / ") || "Sin ciclo registrado")}</td><td>${servicios.length ? servicios.map(esc).join("<br>") : "—"}</td><td>${(p.items || []).length}</td><td><strong>${formatCOP(p.total)}</strong></td>
     <td><span class="pill ${estadoPreFacturaPill(p.estado)}">${esc(p.estado || "Pendiente de revisión")}</span></td>
     <td class="row-actions"><button class="link-btn" data-ver-previa="${esc(p.id)}">Ver y confirmar</button></td>
   </tr>`;
-  }).join("") || `<tr><td colspan="7" class="muted">Aún no hay datos previos guardados. Usa “Preparar datos” para revisar y guardarlos.</td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="muted">Aún no hay datos previos guardados. Usa “Preparar datos” para revisar y guardarlos.</td></tr>`;
   const rows = state.facturas.map((f) => `<tr>
       <td>${f.archivoUrl ? `<a href="${esc(f.archivoUrl)}" target="_blank" rel="noopener">${esc(f.nombre || "Documento")}</a>` : esc(f.nombre || "—")}</td>
       <td>${esc(f.tipo || "—")}</td>
@@ -1259,7 +1274,7 @@ async function renderFacturacion() {
   content.innerHTML = `
     <div class="alert info"><strong>Total facturado registrado:</strong> ${formatCOP(total)}</div>
     <section class="panel" style="margin-bottom:16px"><div style="padding:0 0 .7rem"><h3 style="margin:0">Datos previos a factura</h3><p class="muted sm" style="margin:.25rem 0 0">Información guardada para revisar antes de registrarla en el sistema externo.</p><p style="margin:.6rem 0 0"><strong>Total de las facturas previas:</strong> ${formatCOP(totalPrevias)}</p></div>
-      <table class="data-table"><thead><tr><th>Asociado</th><th>Período</th><th>Servicio(s) adquirido(s)</th><th>Ítems</th><th>Total factura</th><th>Estado</th><th></th></tr></thead><tbody>${previasRows}</tbody></table>
+      <table class="data-table"><thead><tr><th>Asociado</th><th>Período</th><th>Ciclo</th><th>Servicio(s) adquirido(s)</th><th>Ítems</th><th>Total factura</th><th>Estado</th><th></th></tr></thead><tbody>${previasRows}</tbody></table>
     </section>
     <section class="panel"><table class="data-table">
     <thead><tr><th>Documento</th><th>Tipo</th><th>Periodo</th><th>Valor</th><th>Estado</th><th></th></tr></thead>
