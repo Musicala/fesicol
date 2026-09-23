@@ -1105,8 +1105,118 @@ function formInscripcion(i = null) {
 }
 
 /* ---------- FACTURACIÓN ---------- */
+function prepararDatosFacturacion(periodo = "") {
+  const grupos = new Map();
+  const detalle = [];
+  state.inscripciones
+    .filter((i) => ["Inscrito", "Activo"].includes(i.estado || "Inscrito") && (!periodo || i.mes === periodo))
+    .forEach((i) => {
+      const estudiante = state.estudiantes.find((e) => e.id === i.estudianteId);
+      const asociados = asociadosDe(estudiante);
+      const asociadoResponsable = asociados.find((a) => String(a.documento || a.nombre) === String(i.asociadoDocumento || i.asociadoNombre))
+        || asociados[0]
+        || { nombre: i.asociadoNombre || "Sin asociado asignado", documento: i.asociadoDocumento || "", telefono: "" };
+      const asociadoKey = asociadoResponsable.documento || asociadoResponsable.nombre || `sin-asociado-${i.estudianteId || i.id}`;
+      const key = `${i.mes || "sin-periodo"}::${asociadoKey}`;
+      if (!grupos.has(key)) grupos.set(key, {
+        periodo: i.mes || "Sin período", asociado: asociadoResponsable.nombre || "Sin asociado asignado",
+        documento: asociadoResponsable.documento || "", telefono: asociadoResponsable.telefono || "", items: [], total: 0
+      });
+      const beneficiarios = beneficiariosPaquete(i)
+        .map((x) => state.estudiantes.find((e) => e.id === x.estudianteId)?.nombre || x.estudianteNombre || "Sin estudiante")
+        .filter((nombre, index, lista) => lista.indexOf(nombre) === index);
+      const valor = precioFacturable(i);
+      const item = {
+        periodo: i.mes || "", asociado: asociadoResponsable.nombre || "Sin asociado asignado",
+        documentoAsociado: asociadoResponsable.documento || "", telefonoAsociado: asociadoResponsable.telefono || "",
+        estudiante: estudiante?.nombre || i.estudianteNombre || "Sin estudiante", beneficiarios: beneficiarios.join(" / "),
+        todosLosAsociados: asociados.map((a) => [a.nombre, a.documento ? `doc. ${a.documento}` : "", a.telefono].filter(Boolean).join(" · ")).join(" / "),
+        servicio: i.servicio || "", modalidad: i.modalidad || "", duracion: i.duracion || "", estado: i.estado || "", valor,
+        desglose: `${estudiante?.nombre || i.estudianteNombre || "Sin estudiante"}: ${i.servicio || i.modalidad || "Servicio"}${i.duracion ? ` (${i.duracion})` : ""}${i.paqueteMusifamiliarId ? ` · Beneficiarios: ${beneficiarios.join(", ")}` : ""}`
+      };
+      grupos.get(key).items.push(item);
+      grupos.get(key).total += valor;
+      detalle.push(item);
+    });
+  const salidas = [...grupos.values()].map((g) => ({
+    ...g,
+    desglose: g.items.map((i) => `${i.desglose} — ${formatCOP(i.valor)}`).join("\n")
+  }));
+  return { salidas, detalle };
+}
+
+async function copiarDatosFacturacion(salidas) {
+  const texto = salidas.map((g, index) => [
+    `FACTURACIÓN ${index + 1}`,
+    `Período: ${g.periodo}`,
+    `Asociado: ${g.asociado}`,
+    `Documento: ${g.documento || "Sin registrar"}`,
+    `Teléfono: ${g.telefono || "Sin registrar"}`,
+    "Desglose:", g.desglose,
+    `TOTAL: ${formatCOP(g.total)}`
+  ].join("\n")).join("\n\n--------------------\n\n");
+  try {
+    await navigator.clipboard.writeText(texto);
+    toast("Datos copiados. Ya puedes pegarlos en el otro programa ✅", "success");
+  } catch (err) {
+    console.error(err);
+    toast("No fue posible copiar automáticamente. Descarga el Excel.", "error", 5000);
+  }
+}
+
+async function descargarDatosFacturacion(salidas, detalle) {
+  if (!salidas.length) return;
+  setLoading(true, "Preparando Excel…");
+  try {
+    const XLSX = await loadXLSX();
+    const resumen = salidas.map((g) => ({
+      Período: g.periodo, Asociado: g.asociado, Documento: g.documento, Teléfono: g.telefono,
+      Total: g.total, Desglose: g.desglose
+    }));
+    const detalleExcel = detalle.map((i) => ({
+      Período: i.periodo, Asociado: i.asociado, "Documento asociado": i.documentoAsociado,
+      "Teléfono asociado": i.telefonoAsociado, Estudiante: i.estudiante, Beneficiarios: i.beneficiarios,
+      "Todos los asociados": i.todosLosAsociados, Servicio: i.servicio, Modalidad: i.modalidad,
+      Duración: i.duracion, Estado: i.estado, Valor: i.valor, Desglose: i.desglose
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), "Listo para facturar");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalleExcel), "Desglose");
+    XLSX.writeFile(wb, "datos-para-facturacion-fesicol.xlsx");
+    toast("Excel de facturación preparado ✅", "success");
+  } catch (err) {
+    console.error(err); toast("Error preparando el Excel: " + (err?.message || err), "error", 5000);
+  } finally { setLoading(false); }
+}
+
+function modalDatosFacturacion() {
+  const periodos = [...new Set(state.inscripciones.map((i) => i.mes).filter(Boolean))].sort().reverse();
+  openModal("Preparar datos para facturar", `
+    <div class="form">
+      <label class="field"><span>Período</span>
+        <select id="periodoFacturacion"><option value="">Todos los períodos</option>${periodos.map((p) => `<option value="${esc(p)}" ${p === monthISO() ? "selected" : ""}>${esc(mesLabel(p))}</option>`).join("")}</select>
+      </label>
+      <p class="muted sm">Se agrupan por asociado las inscripciones pendientes (Inscrito o Activo). Las ya facturadas, pagadas o retiradas no se incluyen. Esto no genera una factura legal ni modifica registros.</p>
+      <div id="datosFacturacionPreview"></div>
+    </div>`);
+  const actualizar = () => {
+    const { salidas, detalle } = prepararDatosFacturacion($("#periodoFacturacion").value);
+    const total = salidas.reduce((suma, g) => suma + g.total, 0);
+    $("#datosFacturacionPreview").innerHTML = !salidas.length
+      ? `<div class="alert info">No hay inscripciones facturables para este período.</div>`
+      : `<div class="alert ok"><strong>${salidas.length} cuenta(s) preparada(s):</strong> ${formatCOP(total)} en total.</div>
+        <div class="form-row"><button type="button" class="btn secondary" id="copyDatosFacturacion">Copiar datos</button><button type="button" class="btn primary" id="downloadDatosFacturacion">⬇ Descargar Excel</button></div>
+        <section class="panel" style="padding:.75rem;max-height:320px;overflow:auto">${salidas.map((g) => `<div style="padding:.55rem 0;border-bottom:1px solid rgba(17,24,39,.09)"><strong>${esc(g.asociado)}</strong> <span class="muted">· doc. ${esc(g.documento || "sin registrar")} · ${esc(g.periodo)}</span><br><span class="muted sm">${esc(g.desglose).replace(/\n/g, "<br>")}</span><br><strong>Total: ${formatCOP(g.total)}</strong></div>`).join("")}</section>`;
+    $("#copyDatosFacturacion") && ($("#copyDatosFacturacion").onclick = () => copiarDatosFacturacion(salidas));
+    $("#downloadDatosFacturacion") && ($("#downloadDatosFacturacion").onclick = () => descargarDatosFacturacion(salidas, detalle));
+  };
+  $("#periodoFacturacion").onchange = actualizar;
+  actualizar();
+}
+
 async function renderFacturacion() {
-  $("#topbarActions").innerHTML = `<button class="btn secondary sm" id="expFac">⬇ Excel</button>` + adminOnly(`<button class="btn primary sm" id="addFac">+ Documento</button>`);
+  $("#topbarActions").innerHTML = `<button class="btn secondary sm" id="prepFac">Preparar datos</button><button class="btn secondary sm" id="expFac">⬇ Excel</button>` + adminOnly(`<button class="btn primary sm" id="addFac">+ Documento</button>`);
+  $("#prepFac").onclick = () => modalDatosFacturacion();
   $("#addFac") && ($("#addFac").onclick = () => formFactura());
   $("#expFac").onclick = () => exportToExcel(state.facturas.map((f) => ({
     Documento: f.nombre ?? "", Tipo: f.tipo ?? "", Periodo: f.periodo ?? "", Valor: f.valor ?? 0,
