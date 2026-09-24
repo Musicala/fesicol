@@ -30,6 +30,7 @@ const ADMIN_EMAILS = [
 ];
 const isAdminEmail = (email) => ADMIN_EMAILS.includes(String(email || "").trim().toLowerCase());
 const isAdmin = () => state.role === "admin";
+const PREFACTURA_DESTINATARIO = "asesorintegral1@fesicol.com";
 
 /* -------- DOM helpers -------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -1199,6 +1200,109 @@ function estadoPreFacturaPill(estado) {
   return estado === "Confirmado" ? "green" : estado === "Registrado externamente" ? "blue" : "amber";
 }
 
+function numeroPreFactura(p) {
+  if (p?.numeroPreFactura) return p.numeroPreFactura;
+  const periodo = String(p?.periodo || todayISO().slice(0, 7)).replace(/[^0-9]/g, "") || "SINPERIODO";
+  const sufijo = String(p?.id || "BORRADOR").replace(/[^a-z0-9]/gi, "").slice(-6).toUpperCase() || "BORRADOR";
+  return `PF-${periodo}-${sufijo}`;
+}
+
+function fechaLarga(fecha = todayISO()) {
+  return new Intl.DateTimeFormat("es-CO", { day: "2-digit", month: "long", year: "numeric" }).format(new Date(`${fecha}T12:00:00`));
+}
+
+async function logoComoDataUrl() {
+  const response = await fetch("logo.png");
+  const blob = await response.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function generarPdfPreFactura(p) {
+  const { jsPDF } = await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.1/+esm");
+  const pdf = new jsPDF({ unit: "pt", format: "letter" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const margin = 48;
+  const azul = [12, 65, 196];
+  const texto = [20, 31, 59];
+  const suave = [238, 245, 255];
+  let y = 52;
+  try { pdf.addImage(await logoComoDataUrl(), "PNG", margin, y, 116, 52); } catch (_) { /* El PDF sigue siendo utilizable sin logo. */ }
+  pdf.setTextColor(...texto); pdf.setFont("helvetica", "bold"); pdf.setFontSize(22);
+  pdf.text("PREFACTURA", pageWidth - margin, y + 8, { align: "right" });
+  pdf.setFont("helvetica", "normal"); pdf.setFontSize(10); pdf.setTextColor(90, 100, 125);
+  pdf.text(`No. ${numeroPreFactura(p)}`, pageWidth - margin, y + 28, { align: "right" });
+  pdf.text(`Fecha de emisión: ${fechaLarga()}`, pageWidth - margin, y + 44, { align: "right" });
+  pdf.setDrawColor(207, 218, 234); pdf.line(margin, 126, pageWidth - margin, 126);
+  y = 150; pdf.setTextColor(...texto); pdf.setFontSize(11); pdf.setFont("helvetica", "bold");
+  pdf.text("Emisor", margin, y); pdf.text("Dirigido a", 290, y);
+  pdf.setFont("helvetica", "normal"); pdf.setFontSize(10); y += 18;
+  ["Musicala", "NIT 901632973", "Bogotá, Colombia", "imusicala@gmail.com"].forEach((line, index) => pdf.text(line, margin, y + index * 14));
+  ["FESICOL Fondo de Empleados", `Contacto: ${PREFACTURA_DESTINATARIO}`, `Asociado: ${p.asociado || "Sin registrar"}`, `Documento: ${p.documento || "Sin registrar"}`].forEach((line, index) => pdf.text(line, 290, y + index * 14));
+  y += 82; pdf.setFont("helvetica", "bold"); pdf.setFontSize(15); pdf.text(`Ciclo: ${ciclosDePreFactura(p).join(" / ") || "Sin ciclo registrado"}`, margin, y);
+  pdf.setFont("helvetica", "normal"); pdf.setFontSize(10); pdf.setTextColor(90, 100, 125); pdf.text(`Período: ${mesLabel(p.periodo)}`, margin, y + 17);
+  y += 45;
+  const cols = [margin, 290, 372, 436, 516];
+  const widths = [242, 82, 64, 80];
+  const header = () => { pdf.setFillColor(...azul); pdf.rect(margin, y, pageWidth - margin * 2, 24, "F"); pdf.setTextColor(255, 255, 255); pdf.setFont("helvetica", "bold"); pdf.setFontSize(9); ["Estudiante / servicio", "Cant.", "Valor", "Total"].forEach((label, i) => pdf.text(label, cols[i], y + 16)); y += 24; };
+  header();
+  (p.items || []).forEach((item) => {
+    const titulo = String(item.estudiante || "Estudiante sin registrar");
+    const subtitulo = `${nombreServicio(item)}${item.duracion ? ` - ${item.duracion}` : ""}`;
+    const lineas = pdf.splitTextToSize(`${titulo}\n${subtitulo}`, widths[0] - 10);
+    const alto = Math.max(42, lineas.length * 12 + 14);
+    if (y + alto > 680) { pdf.addPage(); y = 52; header(); }
+    pdf.setFillColor(...suave); pdf.rect(margin, y, pageWidth - margin * 2, alto, "F");
+    pdf.setTextColor(...texto); pdf.setFont("helvetica", "bold"); pdf.setFontSize(10); pdf.text(lineas[0] || "", cols[0], y + 16);
+    pdf.setFont("helvetica", "normal"); pdf.setTextColor(90, 100, 125); pdf.setFontSize(9); pdf.text(lineas.slice(1), cols[0], y + 29);
+    pdf.setTextColor(...texto); pdf.setFontSize(10); pdf.text("1", cols[1], y + 18); pdf.text(formatCOP(item.valor), cols[2], y + 18); pdf.setFont("helvetica", "bold"); pdf.text(formatCOP(item.valor), cols[3], y + 18);
+    y += alto + 1;
+  });
+  if (y > 600) { pdf.addPage(); y = 72; }
+  pdf.setDrawColor(207, 218, 234); pdf.line(340, y + 12, pageWidth - margin, y + 12); y += 34;
+  pdf.setTextColor(...texto); pdf.setFont("helvetica", "bold"); pdf.setFontSize(12); pdf.text("Total prefactura", 340, y); pdf.setFontSize(16); pdf.text(formatCOP(p.total), pageWidth - margin, y, { align: "right" });
+  y += 38; pdf.setFont("helvetica", "normal"); pdf.setTextColor(90, 100, 125); pdf.setFontSize(8.5);
+  const nota = "Documento informativo previo a la factura electrónica DIAN. No constituye factura de venta ni reemplaza el documento tributario oficial.";
+  pdf.text(pdf.splitTextToSize(nota, pageWidth - margin * 2), margin, y);
+  const pages = pdf.getNumberOfPages();
+  for (let page = 1; page <= pages; page += 1) { pdf.setPage(page); pdf.setFontSize(8); pdf.setTextColor(120, 130, 150); pdf.text(`Prefactura ${numeroPreFactura(p)} · Página ${page} de ${pages}`, pageWidth - margin, 760, { align: "right" }); }
+  return pdf;
+}
+
+async function descargarPreFactura(p) {
+  setLoading(true, "Generando prefactura…");
+  try {
+    const pdf = await generarPdfPreFactura(p);
+    pdf.save(`${numeroPreFactura(p)}.pdf`);
+    toast("Prefactura descargada ✅", "success");
+  } catch (err) {
+    console.error(err); toast("No fue posible generar el PDF: " + (err?.message || err), "error", 6000);
+  } finally { setLoading(false); }
+}
+
+async function enviarPreFactura(p) {
+  if (!confirm(`Se enviará la prefactura ${numeroPreFactura(p)} a ${PREFACTURA_DESTINATARIO}. ¿Continuar?`)) return;
+  setLoading(true, "Generando y enviando prefactura…");
+  try {
+    const pdf = await generarPdfPreFactura(p);
+    const pdfBase64 = pdf.output("datauristring").split(",")[1];
+    const token = await auth.currentUser.getIdToken();
+    const response = await fetch(`https://us-central1-${firebaseConfig.projectId}.cloudfunctions.net/enviarPreFactura`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ data: { preFacturaId: p.id, numeroPreFactura: numeroPreFactura(p), destinatario: PREFACTURA_DESTINATARIO, pdfBase64 } })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result?.error) throw new Error(result?.error?.message || "El servicio de correo no respondió correctamente.");
+    await refresh(); closeModal(); toast(`Prefactura enviada a ${PREFACTURA_DESTINATARIO} ✅`, "success", 5000);
+  } catch (err) {
+    console.error(err); toast("No se envió la prefactura: " + (err?.message || err), "error", 7000);
+  } finally { setLoading(false); }
+}
+
 function ciclosDePreFactura(p) {
   const desdeDetalle = (p.items || []).map((i) => i.ciclo || cicloNombre(i.cicloId)).filter((c) => c && c !== "—");
   if (desdeDetalle.length) return [...new Set(desdeDetalle)];
@@ -1227,11 +1331,17 @@ function verDatosPreviosFactura(p) {
       <div><strong>Total a registrar</strong><br>${formatCOP(p.total)}</div>
     </div>
     <section class="panel" style="padding:.75rem"><table class="data-table"><thead><tr><th>Estudiante</th><th>Beneficiarios</th><th>Ciclo</th><th>Servicio</th><th>Duración</th><th>Valor</th></tr></thead><tbody>${detalle}</tbody></table></section>
+    <div class="alert info" style="margin-top:12px"><strong>Prefactura ${esc(numeroPreFactura(p))}</strong><br><span class="muted sm">Documento previo, no válido como factura electrónica DIAN.</span></div>
+    ${p.enviadoAt ? `<p class="muted sm">Último envío: ${esc(p.enviadoA || PREFACTURA_DESTINATARIO)}${p.enviadoPor ? ` · por ${esc(p.enviadoPor)}` : ""}</p>` : ""}
     <p class="muted sm" style="margin-top:12px">Estos datos quedan guardados aquí como paso previo; registrar la factura en el otro programa no modifica este detalle.</p>
-    <div class="form-row">${adminOnly(`${p.estado !== "Confirmado" ? `<button type="button" class="btn primary" id="confirmPreFactura">Confirmar datos</button>` : ""}${p.estado !== "Registrado externamente" ? `<button type="button" class="btn secondary" id="externalPreFactura">Marcar como registrado externamente</button>` : ""}`)}</div>`);
+    <div class="form-row"><button type="button" class="btn secondary" id="downloadPreFactura">⬇ Descargar PDF</button>${adminOnly(`${p.estado !== "Confirmado" ? `<button type="button" class="btn primary" id="confirmPreFactura">Confirmar datos</button>` : ""}${p.estado === "Confirmado" ? `<button type="button" class="btn primary" id="sendPreFactura">✉ Enviar a FESICOL</button>` : ""}${p.estado !== "Registrado externamente" ? `<button type="button" class="btn secondary" id="externalPreFactura">Marcar como registrado externamente</button>` : ""}`)}</div>`);
+  $("#downloadPreFactura").onclick = () => descargarPreFactura(p);
   $("#confirmPreFactura") && ($("#confirmPreFactura").onclick = async () => {
-    await DB.updatePreFacturaEstado(p.id, "Confirmado"); closeModal(); await refresh(); toast("Datos confirmados ✅", "success");
+    await DB.updatePreFacturaEstado(p.id, "Confirmado", { numeroPreFactura: numeroPreFactura(p), confirmadoAt: new Date().toISOString(), confirmadoPor: auth.currentUser?.email || "" }); await refresh();
+    const actualizada = state.preFacturas.find((x) => x.id === p.id) || { ...p, numeroPreFactura: numeroPreFactura(p), estado: "Confirmado" };
+    verDatosPreviosFactura(actualizada); toast("Datos confirmados. Ya puedes enviar la prefactura. ✅", "success");
   });
+  $("#sendPreFactura") && ($("#sendPreFactura").onclick = () => enviarPreFactura(p));
   $("#externalPreFactura") && ($("#externalPreFactura").onclick = async () => {
     if (!confirm("¿Ya registraste esta factura en el otro programa?")) return;
     await DB.updatePreFacturaEstado(p.id, "Registrado externamente"); closeModal(); await refresh(); toast("Marcado como registrado externamente ✅", "success");

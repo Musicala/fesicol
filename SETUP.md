@@ -63,6 +63,29 @@ El aviso por **correo** automático (sin abrir el panel) necesita un backend, po
 - **Cloud Functions + Scheduler** (plan Blaze de Firebase) con una función diaria que revise `ciclos` y envíe correo vía SendGrid/Gmail API.
 - O un **Apps Script con disparador por tiempo** que lea Firestore y mande el correo.
 
+### Envío de prefacturas FESICOL
+
+La acción **Enviar a FESICOL** crea el PDF en el navegador y llama a la función
+segura `enviarPreFactura`. Solo los administradores pueden usarla; el destinatario
+está fijado en `asesorintegral1@fesicol.com` y cada envío queda registrado en la
+prefactura.
+
+Antes del primer despliegue, configura en Resend un dominio remitente que pueda
+usar `facturacion@musicala.co`, instala las dependencias y guarda la clave como
+secreto de Firebase (nunca en `app.js`):
+
+```powershell
+cd functions
+npm install
+cd ..
+firebase functions:secrets:set RESEND_API_KEY --project manager-fesicol
+firebase deploy --only functions --project manager-fesicol
+```
+
+El proyecto requiere facturación habilitada (plan Blaze) para desplegar Cloud
+Functions. El correo no se enviará hasta que el secreto y el dominio remitente
+queden configurados.
+
 Si quieres, lo montamos como una mini Fase 3.1.
 
 ---

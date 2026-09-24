@@ -446,8 +446,8 @@ export async function savePreFacturas(items = []) {
   await batch.commit();
 }
 
-export async function updatePreFacturaEstado(id, estado) {
-  await updateDoc(doc(_db, "preFacturas", id), { estado, updatedAt: serverTimestamp() });
+export async function updatePreFacturaEstado(id, estado, extra = {}) {
+  await updateDoc(doc(_db, "preFacturas", id), { ...extra, estado, updatedAt: serverTimestamp() });
 }
 
 /* =========================================================
