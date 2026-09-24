@@ -1129,12 +1129,15 @@ function prepararDatosFacturacion(periodo = "") {
       const asociadoResponsable = asociados.find((a) => String(a.documento || a.nombre) === String(i.asociadoDocumento || i.asociadoNombre))
         || asociados[0]
         || { nombre: i.asociadoNombre || "Sin asociado asignado", documento: i.asociadoDocumento || "", telefono: "" };
-      const asociadoKey = asociadoResponsable.documento || asociadoResponsable.nombre || `sin-asociado-${i.estudianteId || i.id}`;
-      const key = `${i.mes || "sin-periodo"}::${asociadoKey}`;
+      const cicloId = i.cicloId || "sin-ciclo";
+      const ciclo = cicloNombre(i.cicloId) || "Sin ciclo registrado";
+      // FESICOL recibe una sola prefactura por período y ciclo, no una por asociado.
+      const key = `${i.mes || "sin-periodo"}::${cicloId}`;
       if (!grupos.has(key)) grupos.set(key, {
-        id: encodeURIComponent(key),
-        periodo: i.mes || "Sin período", asociado: asociadoResponsable.nombre || "Sin asociado asignado",
-        documento: asociadoResponsable.documento || "", telefono: asociadoResponsable.telefono || "", items: [], total: 0
+        id: encodeURIComponent(`consolidada::${key}`),
+        periodo: i.mes || "Sin período", cicloId, ciclo,
+        asociado: "FESICOL Fondo de Empleados", documento: "", telefono: "", facturadoA: "FESICOL Fondo de Empleados",
+        consolidada: true, items: [], total: 0
       });
       const beneficiarios = beneficiariosPaquete(i)
         .map((x) => state.estudiantes.find((e) => e.id === x.estudianteId)?.nombre || x.estudianteNombre || "Sin estudiante")
@@ -1145,7 +1148,7 @@ function prepararDatosFacturacion(periodo = "") {
         documentoAsociado: asociadoResponsable.documento || "", telefonoAsociado: asociadoResponsable.telefono || "",
         estudiante: estudiante?.nombre || i.estudianteNombre || "Sin estudiante", beneficiarios: beneficiarios.join(" / "),
         todosLosAsociados: asociados.map((a) => [a.nombre, a.documento ? `doc. ${a.documento}` : "", a.telefono].filter(Boolean).join(" · ")).join(" / "),
-        cicloId: i.cicloId || "", ciclo: cicloNombre(i.cicloId), servicio: nombreServicio(i), modalidad: i.modalidad || "", duracion: i.duracion || "", estado: i.estado || "", valor,
+        cicloId: i.cicloId || "", ciclo, servicio: nombreServicio(i), modalidad: i.modalidad || "", duracion: i.duracion || "", estado: i.estado || "", valor,
         desglose: `${estudiante?.nombre || i.estudianteNombre || "Sin estudiante"}: ${nombreServicio(i)}${i.duracion ? ` (${i.duracion})` : ""}${i.paqueteMusifamiliarId ? ` · Beneficiarios: ${beneficiarios.join(", ")}` : ""}`
       };
       grupos.get(key).items.push(item);
@@ -1157,6 +1160,51 @@ function prepararDatosFacturacion(periodo = "") {
     desglose: g.items.map((i) => `${i.desglose} — ${formatCOP(i.valor)}`).join("\n")
   }));
   return { salidas, detalle };
+}
+
+function esPreFacturaConsolidada(p) {
+  return !!(p?.consolidada || p?.facturadoA === "FESICOL Fondo de Empleados");
+}
+
+function claveConsolidacionLegado(p) {
+  return `${p?.periodo || "sin-periodo"}::${ciclosDePreFactura(p).join("|") || "sin-ciclo"}`;
+}
+
+async function consolidarPreFacturasLegado() {
+  const candidatas = state.preFacturas.filter((p) => p.estado !== "Consolidado" && !esPreFacturaConsolidada(p));
+  if (!candidatas.length) return;
+  const grupos = new Map();
+  candidatas.forEach((p) => {
+    const key = claveConsolidacionLegado(p);
+    if (!grupos.has(key)) grupos.set(key, []);
+    grupos.get(key).push(p);
+  });
+  const resumen = [...grupos.values()].map((grupo) => `${grupo[0].periodo} · ${ciclosDePreFactura(grupo[0]).join(" / ") || "Sin ciclo"}: ${grupo.length} registro(s)`).join("\n");
+  if (!confirm(`Se crearán prefacturas consolidadas para FESICOL y los registros individuales quedarán conservados como historial.\n\n${resumen}\n\n¿Continuar?`)) return;
+  try {
+    setLoading(true, "Consolidando prefacturas…");
+    const nuevas = [...grupos.entries()].map(([key, grupo]) => {
+      const base = grupo[0];
+      const items = grupo.flatMap((p) => p.items || []);
+      const ciclos = ciclosDePreFactura(base);
+      const cicloId = items[0]?.cicloId || key.split("::").pop() || "sin-ciclo";
+      return {
+        id: encodeURIComponent(`consolidada::${base.periodo || "sin-periodo"}::${cicloId}`), periodo: base.periodo || "", ciclo: ciclos.join(" / "), cicloId,
+        asociado: "FESICOL Fondo de Empleados", facturadoA: "FESICOL Fondo de Empleados", documento: "", telefono: "",
+        consolidada: true, origenesPreFactura: grupo.map((p) => p.id), items,
+        total: items.reduce((suma, item) => suma + (Number(item.valor) || 0), 0),
+        desglose: items.map((item) => `${item.desglose || `${item.estudiante}: ${nombreServicio(item)}`} — ${formatCOP(item.valor)}`).join("\n"),
+        estado: grupo.every((p) => p.estado === "Confirmado") ? "Confirmado" : "Pendiente de revisión"
+      };
+    });
+    await DB.savePreFacturas(nuevas);
+    const destinoPorOrigen = new Map(nuevas.flatMap((nueva) => nueva.origenesPreFactura.map((id) => [id, nueva.id])));
+    await Promise.all(candidatas.map((p) => DB.updatePreFacturaEstado(p.id, "Consolidado", { consolidadaEn: destinoPorOrigen.get(p.id) || "" })));
+    await refresh();
+    toast(`${nuevas.length} prefactura(s) consolidada(s) para FESICOL ✅`, "success", 5000);
+  } catch (err) {
+    console.error(err); toast("No se pudieron consolidar los registros: " + (err?.message || err), "error", 6000);
+  } finally { setLoading(false); }
 }
 
 async function guardarDatosPrevios(salidas) {
@@ -1304,6 +1352,7 @@ async function enviarPreFactura(p) {
 }
 
 function ciclosDePreFactura(p) {
+  if (p?.ciclo) return String(p.ciclo).split(" / ").filter(Boolean);
   const desdeDetalle = (p.items || []).map((i) => i.ciclo || cicloNombre(i.cicloId)).filter((c) => c && c !== "—");
   if (desdeDetalle.length) return [...new Set(desdeDetalle)];
   return [...new Set(state.inscripciones
@@ -1324,7 +1373,7 @@ function verDatosPreviosFactura(p) {
   openModal(`Datos previos · ${p.asociado || ""}`, `
     <div class="alert info"><strong>Estado:</strong> <span class="pill ${estadoPreFacturaPill(p.estado)}">${esc(p.estado || "Pendiente de revisión")}</span></div>
     <div class="grid-2" style="margin-bottom:12px">
-      <div><strong>Asociado que factura</strong><br>${esc(p.asociado || "—")}</div>
+      <div><strong>${esPreFacturaConsolidada(p) ? "Facturado a" : "Asociado que factura"}</strong><br>${esc(p.facturadoA || p.asociado || "—")}</div>
       <div><strong>Documento / teléfono</strong><br>${esc(p.documento || "Sin registrar")} · ${esc(p.telefono || "Sin registrar")}</div>
       <div><strong>Período</strong><br>${esc(p.periodo || "—")}</div>
       <div><strong>Ciclo</strong><br>${esc(ciclos.join(" / ") || "Sin ciclo registrado")}</div>
@@ -1358,7 +1407,8 @@ async function renderFacturacion() {
   })), "facturacion-fesicol.xlsx", "Facturacion");
 
   const total = state.facturas.reduce((a, b) => a + (b.valor || 0), 0);
-  const previas = state.preFacturas.slice().sort((a, b) => String(b.periodo || "").localeCompare(String(a.periodo || "")) || String(a.asociado || "").localeCompare(String(b.asociado || "")));
+  const previas = state.preFacturas.filter((p) => p.estado !== "Consolidado").slice().sort((a, b) => String(b.periodo || "").localeCompare(String(a.periodo || "")) || String(a.asociado || "").localeCompare(String(b.asociado || "")));
+  const hayLegadoSinConsolidar = previas.some((p) => !esPreFacturaConsolidada(p));
   const totalPrevias = previas.reduce((suma, p) => suma + (Number(p.total) || 0), 0);
   const previasRows = previas.map((p) => {
     const servicios = [...new Set((p.items || []).map((i) => nombreServicio(i)).filter(Boolean))];
@@ -1383,13 +1433,14 @@ async function renderFacturacion() {
 
   content.innerHTML = `
     <div class="alert info"><strong>Total facturado registrado:</strong> ${formatCOP(total)}</div>
-    <section class="panel" style="margin-bottom:16px"><div style="padding:0 0 .7rem"><h3 style="margin:0">Datos previos a factura</h3><p class="muted sm" style="margin:.25rem 0 0">Información guardada para revisar antes de registrarla en el sistema externo.</p><p style="margin:.6rem 0 0"><strong>Total de las facturas previas:</strong> ${formatCOP(totalPrevias)}</p></div>
-      <table class="data-table"><thead><tr><th>Asociado</th><th>Período</th><th>Ciclo</th><th>Servicio(s) adquirido(s)</th><th>Ítems</th><th>Total factura</th><th>Estado</th><th></th></tr></thead><tbody>${previasRows}</tbody></table>
+    <section class="panel" style="margin-bottom:16px"><div style="padding:0 0 .7rem"><h3 style="margin:0">Prefacturas consolidadas</h3><p class="muted sm" style="margin:.25rem 0 0">Una prefactura por período y ciclo, facturada a FESICOL e incluyendo todos los estudiantes inscritos.</p><p style="margin:.6rem 0 0"><strong>Total de las prefacturas:</strong> ${formatCOP(totalPrevias)}</p>${adminOnly(hayLegadoSinConsolidar ? `<p style="margin:.7rem 0 0"><button type="button" class="btn secondary sm" id="consolidarLegado">Consolidar registros actuales</button></p>` : "")}</div>
+      <table class="data-table"><thead><tr><th>Facturado a</th><th>Período</th><th>Ciclo</th><th>Servicio(s) adquirido(s)</th><th>Ítems</th><th>Total prefactura</th><th>Estado</th><th></th></tr></thead><tbody>${previasRows}</tbody></table>
     </section>
     <section class="panel"><table class="data-table">
     <thead><tr><th>Documento</th><th>Tipo</th><th>Periodo</th><th>Valor</th><th>Estado</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table></section>`;
   content.querySelectorAll("[data-ver-previa]").forEach((b) => b.onclick = () => verDatosPreviosFactura(state.preFacturas.find((p) => p.id === b.dataset.verPrevia)));
+  $("#consolidarLegado") && ($("#consolidarLegado").onclick = consolidarPreFacturasLegado);
   content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => formFactura(state.facturas.find((x) => x.id === b.dataset.edit)));
   content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
     if (!confirm("¿Eliminar documento?")) return;
