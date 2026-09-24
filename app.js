@@ -1367,7 +1367,7 @@ async function renderFacturacion() {
     <td><strong>${esc(p.asociado || "—")}</strong><br><span class="muted sm">doc. ${esc(p.documento || "sin registrar")}</span></td>
     <td>${esc(p.periodo || "—")}</td><td>${esc(ciclos.join(" / ") || "Sin ciclo registrado")}</td><td>${servicios.length ? servicios.map(esc).join("<br>") : "—"}</td><td>${(p.items || []).length}</td><td><strong>${formatCOP(p.total)}</strong></td>
     <td><span class="pill ${estadoPreFacturaPill(p.estado)}">${esc(p.estado || "Pendiente de revisión")}</span></td>
-    <td class="row-actions"><button class="link-btn" data-ver-previa="${esc(p.id)}">Ver y confirmar</button></td>
+    <td class="row-actions"><button class="link-btn" data-ver-previa="${esc(p.id)}">${p.estado === "Confirmado" ? "Ver prefactura" : "Revisar y confirmar"}</button></td>
   </tr>`;
   }).join("") || `<tr><td colspan="8" class="muted">Aún no hay datos previos guardados. Usa “Preparar datos” para revisar y guardarlos.</td></tr>`;
   const rows = state.facturas.map((f) => `<tr>
