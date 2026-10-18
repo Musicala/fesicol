@@ -1,3 +1,4 @@
+import { validarPlanilla } from "./planilla-control.js";
 /* =========================================================
    db.js · Capa de datos Firestore para el convenio FESICOL
    ---------------------------------------------------------
@@ -27,7 +28,8 @@ import {
   limit,
   onSnapshot,
   serverTimestamp,
-  writeBatch
+  writeBatch,
+  runTransaction
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 import {
   ref as storageRef,
@@ -516,59 +518,66 @@ export async function deleteArchivo(path) {
    items: [{ estudianteId?, estudiante:{...}, asociado:{...}, inscripcion:{...} }]
 ========================================================= */
 export async function importPlanilla(items, planillaMeta = {}) {
-  const batch = writeBatch(_db);
-  let nuevosEst = 0, nuevasIns = 0;
+  const historial = await getPlanillas();
+  return runTransaction(_db, async (batch) => {
+    const controlRef = doc(_db, "planillas", "control-secuencia");
+    const control = await batch.get(controlRef);
+    const huellaRef = doc(_db, "planillas", `archivo-${planillaMeta.huella}`);
+    const previo = await batch.get(huellaRef);
+    if (previo.exists()) throw new Error("Este archivo ya fue importado.");
+    validarPlanilla(planillaMeta, [...historial, ...(control.exists() ? [control.data()] : [])]);
+    let nuevosEst = 0, nuevasIns = 0;
 
-  // Mismo inscrito puede venir en varias filas (p. ej. con papá y mamá como
-  // asociados, cada uno adquiriendo un servicio). Reutilizamos el mismo
-  // estudiante dentro del lote para no crear duplicados.
-  const normNombre = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
-  const nuevosPorNombre = new Map();
+    // Mismo inscrito puede venir en varias filas (p. ej. con papá y mamá como
+    // asociados, cada uno adquiriendo un servicio). Reutilizamos el mismo
+    // estudiante dentro del lote para no crear duplicados.
+    const normNombre = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const nuevosPorNombre = new Map();
 
-  items.forEach((it) => {
-    // Asociado (id = documento)
-    if (it.asociado?.documento) {
-      const aRef = doc(_db, "asociados", String(it.asociado.documento));
-      batch.set(aRef, { ...it.asociado, updatedAt: serverTimestamp() }, { merge: true });
-    }
+    items.forEach((it) => {
+      // Asociado (id = documento)
+      if (it.asociado?.documento) {
+        const aRef = doc(_db, "asociados", String(it.asociado.documento));
+        batch.set(aRef, { ...it.asociado, updatedAt: serverTimestamp() }, { merge: true });
+      }
 
-    // Estudiante: reutiliza si ya existe (en BD o en este mismo lote), si no, crea
-    let estId = it.estudianteId;
-    const clave = normNombre(it.estudiante?.nombre);
-    if (!estId && clave && nuevosPorNombre.has(clave)) {
-      estId = nuevosPorNombre.get(clave);
-    }
-    if (!estId) {
-      const eRef = doc(col("estudiantes"));
-      estId = eRef.id;
-      batch.set(eRef, { ...it.estudiante, activo: true, createdAt: serverTimestamp() });
-      if (clave) nuevosPorNombre.set(clave, estId);
-      nuevosEst++;
-    } else if (it.estudianteId && Array.isArray(it.estudiante?.asociados)) {
-      // Estudiante ya existente: conecta los asociados de esta planilla (unión ya calculada).
-      batch.set(doc(_db, "estudiantes", estId), {
-        asociados: it.estudiante.asociados,
-        asociadoNombre: it.estudiante.asociadoNombre || "",
-        asociadoDocumento: it.estudiante.asociadoDocumento || "",
-        telefono: it.estudiante.telefono || "",
-        parentesco: it.estudiante.parentesco || "",
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-    }
+      // Estudiante: reutiliza si ya existe (en BD o en este mismo lote), si no, crea
+      let estId = it.estudianteId;
+      const clave = normNombre(it.estudiante?.nombre);
+      if (!estId && clave && nuevosPorNombre.has(clave)) {
+        estId = nuevosPorNombre.get(clave);
+      }
+      if (!estId) {
+        const eRef = doc(col("estudiantes"));
+        estId = eRef.id;
+        batch.set(eRef, { ...it.estudiante, activo: true, createdAt: serverTimestamp() });
+        if (clave) nuevosPorNombre.set(clave, estId);
+        nuevosEst++;
+      } else if (it.estudianteId && Array.isArray(it.estudiante?.asociados)) {
+        // Estudiante ya existente: conecta los asociados de esta planilla (unión ya calculada).
+        batch.set(doc(_db, "estudiantes", estId), {
+          asociados: it.estudiante.asociados,
+          asociadoNombre: it.estudiante.asociadoNombre || "",
+          asociadoDocumento: it.estudiante.asociadoDocumento || "",
+          telefono: it.estudiante.telefono || "",
+          parentesco: it.estudiante.parentesco || "",
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      }
 
-    // Inscripción (si se pidió crear)
-    if (it.inscripcion) {
-      const iRef = doc(col("inscripciones"));
-      batch.set(iRef, {
-        ...it.inscripcion,
-        estudianteId: estId,
-        estudianteNombre: it.estudiante?.nombre || "",
-        precio: parsePrice(it.inscripcion.precio),
-        estado: it.inscripcion.estado || "Inscrito",
-        createdAt: serverTimestamp()
-      });
-      nuevasIns++;
-    }
+      // Inscripción (si se pidió crear)
+      if (it.inscripcion) {
+        const iRef = doc(col("inscripciones"));
+        batch.set(iRef, {
+          ...it.inscripcion,
+          estudianteId: estId,
+          estudianteNombre: it.estudiante?.nombre || "",
+          precio: parsePrice(it.inscripcion.precio),
+          estado: it.inscripcion.estado || "Inscrito",
+          createdAt: serverTimestamp()
+        });
+        nuevasIns++;
+      }
   });
 
   // Registro de la planilla
@@ -577,8 +586,10 @@ export async function importPlanilla(items, planillaMeta = {}) {
     batch.set(pRef, { ...planillaMeta, registros: items.length, createdAt: serverTimestamp() });
   }
 
-  await batch.commit();
+  batch.set(controlRef, { mes: planillaMeta.mes, tipo: "control" });
+  batch.set(huellaRef, { huella: planillaMeta.huella, tipo: "archivo" });
   return { nuevosEst, nuevasIns, total: items.length };
+  });
 }
 
 /* =========================================================

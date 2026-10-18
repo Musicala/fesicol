@@ -1,3 +1,4 @@
+import { siguienteMes, validarPlanilla, detectarMes } from "./planilla-control.js";
 /* =========================================================
    Panel FESICOL · Musicala — app.js (Firestore)
    Fase 1: fundación (ciclos, estudiantes, inscripciones,
@@ -1675,6 +1676,10 @@ function matchTarifa(modalidad, duracion) {
 let _pendingPlanilla = null; // filas parseadas en espera de confirmar
 
 async function renderPlanilla() {
+  _pendingPlanilla = null;
+  const historial = await DB.getPlanillas();
+  const ultimoMes = historial.map(p => p.mes).filter(m => /^\d{4}-(0[1-9]|1[0-2])$/.test(m || "")).sort().at(-1);
+  const mesEsperado = ultimoMes ? siguienteMes(ultimoMes) : "";
   const cicloOpts = state.ciclos.map((c) => `<option value="${c.id}">${esc(c.nombre)}</option>`).join("");
   content.innerHTML = `
     <div class="alert info"><strong>Importa la planilla mensual de FESICOL.</strong>
@@ -1683,8 +1688,9 @@ async function renderPlanilla() {
     <section class="panel">
       <div class="grid-2">
         <label class="field"><span>Ciclo de esta planilla</span><select id="planCiclo"><option value="">— Sin inscripción (solo estudiantes) —</option>${cicloOpts}</select></label>
-        <label class="field"><span>Mes</span><input id="planMes" type="month" value="${monthISO()}"></label>
+        <label class="field"><span>Mes</span><input id="planMes" type="month" value="${mesEsperado || monthISO()}" ${mesEsperado ? "readonly" : ""}></label>
       </div>
+      <p>${ultimoMes ? `Última planilla: ${esc(ultimoMes)}. Siguiente permitida: <strong>${esc(mesEsperado)}</strong>.` : "Primera importación: confirma el mes y año que corresponden al archivo."}</p>
       <label class="field"><span>Archivo de la planilla (.xlsx)</span><input id="planFile" type="file" accept=".xlsx,.xls"></label>
       <div class="form-row"><button class="btn primary" id="planParse">Leer planilla</button></div>
     </section>
@@ -1693,6 +1699,8 @@ async function renderPlanilla() {
   $("#planParse").onclick = async () => {
     const file = $("#planFile").files[0];
     if (!file) { toast("Selecciona el archivo de la planilla.", "error"); return; }
+    _pendingPlanilla = null;
+    $("#planPreview").innerHTML = "";
     setLoading(true, "Leyendo planilla…");
     try {
       const XLSX = await loadXLSX();
@@ -1700,7 +1708,17 @@ async function renderPlanilla() {
       const wb = XLSX.read(buf, { type: "array" });
       const ws = wb.Sheets["FUENTE"] || wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-      _pendingPlanilla = parsePlanillaRows(rows, file);
+      const data = parsePlanillaRows(rows, file);
+      data.huella = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", buf)), b => b.toString(16).padStart(2, "0")).join("");
+      const mesNombre = detectarMes(file.name);
+      const mesContenido = detectarMes(rows.slice(0, rows.findIndex(r => r.some(c => norm(c).includes("nombre del inscrito")))).flat().join(" "));
+      if (mesNombre && mesContenido && mesNombre !== mesContenido) throw new Error("El mes del nombre y del contenido no coinciden.");
+      data.mesDetectado = mesContenido || mesNombre;
+      if (!data.mesDetectado) throw new Error("No pude reconocer el periodo. Verifica el mes real y usa un nombre como Planilla octubre 2026.xlsx.");
+      data.mes = $("#planMes").value;
+      data.cicloId = $("#planCiclo").value;
+      validarPlanilla(data, await DB.getPlanillas());
+      _pendingPlanilla = data;
       drawPlanillaPreview();
     } catch (err) {
       console.error(err); toast("No pude leer el Excel: " + (err?.message || err), "error", 5000);
@@ -1726,7 +1744,7 @@ function loadXLSX() {
 function parsePlanillaRows(rows, file) {
   // Encuentra la fila que contiene "NOMBRE DEL INSCRITO"
   let hIdx = rows.findIndex((r) => r.some((c) => norm(c).includes("nombre del inscrito")));
-  if (hIdx < 0) hIdx = 8;
+  if (hIdx < 0) throw new Error("No encontré el encabezado NOMBRE DEL INSCRITO. Revisa la plantilla.");
   const header = rows[hIdx].map(norm);
   const col = (needle) => header.findIndex((h) => h.includes(needle));
   const idx = {
@@ -1788,6 +1806,7 @@ function drawPlanillaPreview() {
   $("#planPreview").innerHTML = `
     <section class="panel">
       <h3>Vista previa · ${esc(data.fileName)} (${data.rows.length} registros)</h3>
+      <p>Periodo: <strong>${esc(data.mes)}</strong>. ${data.mesDetectado ? "Mes reconocido en el archivo." : "El archivo no identifica mes y año: confirma que corresponde al periodo indicado."}</p>
       ${sinTarifa ? `<div class="alert warn">${sinTarifa} registro(s) sin tarifa automática: revisa modalidad/duración o edítalos luego en Inscripciones.</div>` : ""}
       ${conCiclo ? `<p><strong>Total estimado de la planilla:</strong> ${formatCOP(totalPrecio)}</p>` : `<p class="muted">Sin ciclo seleccionado: solo se cargarán/actualizarán estudiantes (sin inscripción).</p>`}
       <div class="table-wrap"><table class="data-table">
@@ -1801,11 +1820,13 @@ function drawPlanillaPreview() {
 
 async function confirmImportPlanilla() {
   const data = _pendingPlanilla;
-  if (!data) return;
+  if (!data || !data.rows.length) return;
+  if (data.mes !== $("#planMes").value || data.cicloId !== $("#planCiclo").value || data.file !== $("#planFile").files[0]) { toast("Cambiaste los datos: vuelve a leer la planilla.", "error"); return; }
   const cicloId = $("#planCiclo").value;
   const mes = $("#planMes").value;
   setLoading(true, "Importando planilla…");
   try {
+    validarPlanilla(data, await DB.getPlanillas());
     // Sube el archivo original a Storage como soporte
     let archivo = {};
     try { archivo = await DB.uploadArchivo(data.file, "planillas"); } catch (_) {}
@@ -1853,7 +1874,7 @@ async function confirmImportPlanilla() {
 
     const res = await DB.importPlanilla(items, {
       cicloId: cicloId || null, mes, archivoUrl: archivo.url || "", archivoPath: archivo.path || "",
-      nombre: data.fileName, estado: "procesada"
+      nombre: data.fileName, estado: "procesada", huella: data.huella, mesDetectado: data.mesDetectado
     });
 
     _pendingPlanilla = null;
