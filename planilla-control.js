@@ -20,3 +20,27 @@ export function detectarMes(texto) {
   if (encontrados.size > 1) throw new Error("El archivo menciona varios periodos. Usa una planilla que identifique un único mes y año.");
   return [...encontrados][0] || "";
 }
+
+export function detectarCiclo(texto) {
+  const numeros = [...String(texto).matchAll(/\bciclo[\s_:#-]*(\d+)\b/gi)].map(m => Number(m[1]));
+  const unicos = [...new Set(numeros)];
+  if (unicos.length > 1) throw new Error("El archivo identifica varios ciclos diferentes.");
+  return unicos[0] ?? null;
+}
+export function reconocerPeriodo(nombre, encabezado, ciclo, mes) {
+  const mesNombre = detectarMes(nombre), mesContenido = detectarMes(encabezado);
+  if (mesNombre && mesContenido && mesNombre !== mesContenido) throw new Error("El mes del nombre y del contenido no coinciden.");
+  const cicloNombre = detectarCiclo(nombre), cicloContenido = detectarCiclo(encabezado);
+  if (cicloNombre !== null && cicloContenido !== null && cicloNombre !== cicloContenido) throw new Error("El ciclo del nombre y del contenido no coinciden.");
+  const numero = cicloContenido ?? cicloNombre;
+  if (numero !== null) {
+    if (!ciclo) throw new Error(`El archivo corresponde al Ciclo ${numero}. Selecciona ese ciclo para continuar.`);
+    if (detectarCiclo(ciclo.nombre) !== numero) throw new Error(`El archivo corresponde al Ciclo ${numero}, pero seleccionaste ${ciclo.nombre}.`);
+  }
+  const mesExplicito = mesContenido || mesNombre;
+  const mesCiclo = numero !== null && /^\d{4}-\d{2}-\d{2}$/.test(ciclo?.fechaInicioClases || "") ? ciclo.fechaInicioClases.slice(0, 7) : "";
+  const mesDetectado = mesExplicito || mesCiclo;
+  if (!mesDetectado) throw new Error("No pude reconocer el periodo. Selecciona el ciclo indicado en el archivo o identifica el mes y año en su nombre.");
+  if (mesDetectado !== mes) throw new Error(`El archivo corresponde a ${mesDetectado}. Revisa el mes seleccionado (${mes}).`);
+  return { mesDetectado, cicloDetectado: numero, periodoPorCiclo: !mesExplicito && !!mesCiclo };
+}

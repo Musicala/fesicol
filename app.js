@@ -1,4 +1,4 @@
-import { siguienteMes, validarPlanilla, detectarMes } from "./planilla-control.js?v=20261019-2";
+import { siguienteMes, validarPlanilla, reconocerPeriodo } from "./planilla-control.js?v=20261019-3";
 /* =========================================================
    Panel FESICOL · Musicala — app.js (Firestore)
    Fase 1: fundación (ciclos, estudiantes, inscripciones,
@@ -6,8 +6,8 @@ import { siguienteMes, validarPlanilla, detectarMes } from "./planilla-control.j
 ========================================================= */
 
 import { initFirebase } from "./firebase.js";
-import * as DB from "./db.js?v=20261019-2";
-import { formatCOP, parsePrice } from "./db.js?v=20261019-2";
+import * as DB from "./db.js?v=20261019-3";
+import { formatCOP, parsePrice } from "./db.js?v=20261019-3";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBoZuK8koOeOhl2nBrqyUoEznpkqnnrTbs",
@@ -1740,13 +1740,10 @@ async function renderPlanilla() {
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
       const data = parsePlanillaRows(rows, file);
       data.huella = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", buf)), b => b.toString(16).padStart(2, "0")).join("");
-      const mesNombre = detectarMes(file.name);
-      const mesContenido = detectarMes(rows.slice(0, rows.findIndex(r => r.some(c => norm(c).includes("nombre del inscrito")))).flat().join(" "));
-      if (mesNombre && mesContenido && mesNombre !== mesContenido) throw new Error("El mes del nombre y del contenido no coinciden.");
-      data.mesDetectado = mesContenido || mesNombre;
-      if (!data.mesDetectado) throw new Error("No pude reconocer el periodo. Verifica el mes real y usa un nombre como Planilla octubre 2026.xlsx.");
       data.mes = $("#planMes").value;
       data.cicloId = $("#planCiclo").value;
+      const encabezado = rows.slice(0, rows.findIndex(r => r.some(c => norm(c).includes("nombre del inscrito")))).flat().join(" ");
+      Object.assign(data, reconocerPeriodo(file.name, encabezado, state.ciclos.find(c => c.id === data.cicloId), data.mes));
       validarPlanilla(data, await DB.getPlanillas());
       _pendingPlanilla = data;
       drawPlanillaPreview();
@@ -1836,7 +1833,7 @@ function drawPlanillaPreview() {
   $("#planPreview").innerHTML = `
     <section class="panel">
       <h3>Vista previa · ${esc(data.fileName)} (${data.rows.length} registros)</h3>
-      <p>Periodo: <strong>${esc(data.mes)}</strong>. ${data.mesDetectado ? "Mes reconocido en el archivo." : "El archivo no identifica mes y año: confirma que corresponde al periodo indicado."}</p>
+      <p>Periodo: <strong>${esc(data.mes)}</strong>. ${data.mesDetectado ? (data.periodoPorCiclo ? `Ciclo ${data.cicloDetectado} reconocido en el archivo; mes según el inicio de clases del ciclo.` : "Mes reconocido en el archivo.") : "El archivo no identifica mes y año: confirma que corresponde al periodo indicado."}</p>
       ${sinTarifa ? `<div class="alert warn">${sinTarifa} registro(s) sin tarifa automática: revisa modalidad/duración o edítalos luego en Inscripciones.</div>` : ""}
       ${conCiclo ? `<p><strong>Total estimado de la planilla:</strong> ${formatCOP(totalPrecio)}</p>` : `<p class="muted">Sin ciclo seleccionado: solo se cargarán/actualizarán estudiantes (sin inscripción).</p>`}
       <div class="table-wrap"><table class="data-table">
