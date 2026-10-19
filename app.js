@@ -1004,15 +1004,38 @@ async function repararContactosMojibake() {
 }
 
 /* ---------- INSCRIPCIONES ---------- */
+const ordenInscripciones = { columna: "ciclo", direccion: 1 };
+const comparadorInscripciones = new Intl.Collator("es", { numeric: true, sensitivity: "base" });
 async function renderInscripciones() {
+  const columnas = [
+    ["estudiante", "Estudiante", i => estudianteNombre(i.estudianteId) || i.estudianteNombre || ""],
+    ["asociado", "Solicitado por", i => i.asociadoNombre || ""],
+    ["ciclo", "Ciclo", i => cicloNombre(i.cicloId)],
+    ["mes", "Mes", i => i.mes || ""],
+    ["modalidad", "Modalidad", i => i.modalidad || ""],
+    ["duracion", "Duración", i => i.duracion || ""],
+    ["precio", "Paquete / valor", i => parsePrice(i.precio)],
+    ["estado", "Estado", i => i.estado || ""]
+  ];
+  const valor = columnas.find(([clave]) => clave === ordenInscripciones.columna)[2];
+  const inscripciones = [...state.inscripciones].sort((a, b) => {
+    const va = valor(a), vb = valor(b);
+    const comparacion = typeof va === "number" ? va - vb : comparadorInscripciones.compare(String(va ?? ""), String(vb ?? ""));
+    return comparacion * ordenInscripciones.direccion;
+  });
+  const encabezados = columnas.map(([clave, titulo]) => {
+    const activa = ordenInscripciones.columna === clave;
+    const ascendente = ordenInscripciones.direccion === 1;
+    return `<th scope="col" aria-sort="${activa ? (ascendente ? "ascending" : "descending") : "none"}"><button type="button" class="ins-sort" data-sort="${clave}" title="Ordenar por ${titulo}${activa && ascendente ? " de mayor a menor" : " de menor a mayor"}">${titulo} <span aria-hidden="true">${activa ? (ascendente ? "↑" : "↓") : "↕"}</span></button></th>`;
+  }).join("");
   $("#topbarActions").innerHTML = `<button class="btn secondary sm" id="expIns">⬇ Excel</button>` + adminOnly(`<button class="btn primary sm" id="addIns">+ Inscripción</button>`);
   $("#addIns") && ($("#addIns").onclick = () => formInscripcion());
-  $("#expIns").onclick = () => exportToExcel(state.inscripciones.map((i) => ({
+  $("#expIns").onclick = () => exportToExcel(inscripciones.map((i) => ({
     Estudiante: estudianteNombre(i.estudianteId) || i.estudianteNombre || "", "Solicitado por": i.asociadoNombre ?? "", Ciclo: cicloNombre(i.cicloId), Mes: i.mes ?? "",
     Servicio: i.servicio ?? "", Modalidad: i.modalidad ?? "", Duracion: i.duracion ?? "", "Paquete compartido": i.paqueteMusifamiliarId ? "Sí" : "No", "Valor del paquete": i.precio ?? 0, Estado: i.estado ?? ""
   })), "inscripciones-fesicol.xlsx", "Inscripciones");
 
-  const rows = state.inscripciones.map((i) => `<tr>
+  const rows = inscripciones.map((i) => `<tr>
       <td><strong>${esc(estudianteNombre(i.estudianteId) || i.estudianteNombre || "—")}</strong></td>
       <td>${esc(i.asociadoNombre || "—")}</td>
       <td>${esc(cicloNombre(i.cicloId))}</td>
@@ -1027,8 +1050,14 @@ async function renderInscripciones() {
       </td></tr>`).join("") || `<tr><td colspan="9" class="muted">Sin inscripciones.</td></tr>`;
 
   content.innerHTML = `<section class="panel"><table class="data-table">
-    <thead><tr><th>Estudiante</th><th>Solicitado por</th><th>Ciclo</th><th>Mes</th><th>Modalidad</th><th>Duración</th><th>Paquete / valor</th><th>Estado</th><th></th></tr></thead>
+    <thead><tr>${encabezados}<th scope="col">Acciones</th></tr></thead>
     <tbody>${rows}</tbody></table></section>`;
+  content.querySelectorAll("[data-sort]").forEach((b) => b.onclick = async () => {
+    ordenInscripciones.direccion = ordenInscripciones.columna === b.dataset.sort ? -ordenInscripciones.direccion : 1;
+    ordenInscripciones.columna = b.dataset.sort;
+    await renderInscripciones();
+    content.querySelector(`[data-sort="${ordenInscripciones.columna}"]`)?.focus();
+  });
   content.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => formInscripcion(state.inscripciones.find((x) => x.id === b.dataset.edit)));
   content.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
     const inscripcion = state.inscripciones.find((x) => x.id === b.dataset.del);
