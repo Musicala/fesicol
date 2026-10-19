@@ -1,4 +1,4 @@
-import { siguienteMes, validarPlanilla, detectarMes } from "./planilla-control.js";
+import { siguienteMes, validarPlanilla, detectarMes } from "./planilla-control.js?v=20261019-2";
 /* =========================================================
    Panel FESICOL · Musicala — app.js (Firestore)
    Fase 1: fundación (ciclos, estudiantes, inscripciones,
@@ -6,8 +6,8 @@ import { siguienteMes, validarPlanilla, detectarMes } from "./planilla-control.j
 ========================================================= */
 
 import { initFirebase } from "./firebase.js";
-import * as DB from "./db.js";
-import { formatCOP, parsePrice } from "./db.js";
+import * as DB from "./db.js?v=20261019-2";
+import { formatCOP, parsePrice } from "./db.js?v=20261019-2";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBoZuK8koOeOhl2nBrqyUoEznpkqnnrTbs",
@@ -1709,6 +1709,7 @@ async function renderPlanilla() {
   const historial = await DB.getPlanillas();
   const ultimoMes = historial.map(p => p.mes).filter(m => /^\d{4}-(0[1-9]|1[0-2])$/.test(m || "")).sort().at(-1);
   const mesEsperado = ultimoMes ? siguienteMes(ultimoMes) : "";
+  const mesSugerido = ultimoMes ? (monthISO() >= ultimoMes && monthISO() <= mesEsperado ? monthISO() : ultimoMes) : monthISO();
   const cicloOpts = state.ciclos.map((c) => `<option value="${c.id}">${esc(c.nombre)}</option>`).join("");
   content.innerHTML = `
     <div class="alert info"><strong>Importa la planilla mensual de FESICOL.</strong>
@@ -1717,9 +1718,9 @@ async function renderPlanilla() {
     <section class="panel">
       <div class="grid-2">
         <label class="field"><span>Ciclo de esta planilla</span><select id="planCiclo"><option value="">— Sin inscripción (solo estudiantes) —</option>${cicloOpts}</select></label>
-        <label class="field"><span>Mes</span><input id="planMes" type="month" value="${mesEsperado || monthISO()}" ${mesEsperado ? "readonly" : ""}></label>
+        <label class="field"><span>Mes</span><input id="planMes" type="month" value="${mesSugerido}" ${ultimoMes ? `min="${ultimoMes}" max="${mesEsperado}"` : ""}></label>
       </div>
-      <p>${ultimoMes ? `Última planilla: ${esc(ultimoMes)}. Siguiente permitida: <strong>${esc(mesEsperado)}</strong>.` : "Primera importación: confirma el mes y año que corresponden al archivo."}</p>
+      <p>${ultimoMes ? `Último mes importado: <strong>${esc(ultimoMes)}</strong>. Puedes cargar otra planilla de ese mes o continuar con <strong>${esc(mesEsperado)}</strong>. Los archivos ya importados siguen bloqueados.` : "Primera importación: confirma el mes y año que corresponden al archivo."}</p>
       <label class="field"><span>Archivo de la planilla (.xlsx)</span><input id="planFile" type="file" accept=".xlsx,.xls"></label>
       <div class="form-row"><button class="btn primary" id="planParse">Leer planilla</button></div>
     </section>

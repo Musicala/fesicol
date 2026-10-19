@@ -1,4 +1,4 @@
-import { validarPlanilla } from "./planilla-control.js";
+import { validarPlanilla } from "./planilla-control.js?v=20261019-2";
 /* =========================================================
    db.js · Capa de datos Firestore para el convenio FESICOL
    ---------------------------------------------------------

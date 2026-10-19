@@ -8,7 +8,7 @@ export function validarPlanilla(meta, historial) {
   if (historial.some(p => p.huella === meta.huella)) throw new Error("Este archivo ya fue importado, aunque tenga otro nombre.");
   const meses = historial.map(p => p.mes).filter(m => /^\d{4}-(0[1-9]|1[0-2])$/.test(m || "")).sort();
   const ultimo = meses.at(-1);
-  if (ultimo && meta.mes !== siguienteMes(ultimo)) throw new Error(`La siguiente planilla permitida es ${siguienteMes(ultimo)}. La última importada corresponde a ${ultimo}.`);
+  if (ultimo && (meta.mes < ultimo || meta.mes > siguienteMes(ultimo))) throw new Error(`Puedes importar una planilla de ${ultimo} o de ${siguienteMes(ultimo)}. No se permiten meses anteriores ni saltos de mes.`);
   if (meta.mesDetectado && meta.mesDetectado !== meta.mes) throw new Error(`El archivo corresponde a ${meta.mesDetectado}, pero seleccionaste ${meta.mes}.`);
 }
 export function detectarMes(texto) {
