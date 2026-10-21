@@ -1,3 +1,7 @@
 tmp/
 firebase-debug.log
 functions/node_modules/
+hosting-dist/
+.firebase/
+firestore-debug.log
+storage-debug.log
