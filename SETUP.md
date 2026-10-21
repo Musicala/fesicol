@@ -91,3 +91,28 @@ Si quieres, lo montamos como una mini Fase 3.1.
 ---
 ## Próximas ideas
 - Renovación/retención por ciclo (cuántos estudiantes vuelven), reporte trimestral, recordatorios automáticos a estudiantes.
+
+
+## Envío manual con Gmail (octubre de 2026)
+
+La aplicación publicada utiliza Gmail API desde el navegador para el envío manual de prefacturas. El flujo activo sustituye la llamada anterior a Resend; la función antigua no es invocada por el botón.
+
+- Remitente verificado mediante Google: adminmusicala@gmail.com.
+- Para: asesorintegral1@fesicol.com y jefeunidadfinanciera@fesicol.com.
+- CC: imusicala@gmail.com.
+- Permisos solicitados: openid, email y gmail.send. No se solicita lectura del buzón.
+- El token se conserva únicamente en memoria de la página y caduca; se reconecta la cuenta cuando sea necesario. No hay envío desatendido ni conexión permanente.
+- Un administrador abre la vista previa, revisa asunto y mensaje editables, abre el PDF, conecta la cuenta y pulsa Confirmar y enviar.
+- La respuesta de Gmail confirma aceptación, no entrega a cada destinatario. La aplicación intenta guardar el ID del mensaje y los datos del envío en la prefactura. Si falla el registro, indica que no se repita el correo. Si se pierde la respuesta de red, se debe consultar Enviados antes de reintentar.
+- Se bloquean clics simultáneos dentro del formulario y se advierte al reenviar una prefactura con constancia previa. No existe una reserva distribuida entre varias pestañas/administradores.
+
+### Publicación
+
+GitHub conserva el repositorio. Publicar el sitio con:
+
+```powershell
+firebase deploy --only hosting --project manager-fesicol --account imusicala@gmail.com
+```
+
+El predeploy ejecuta scripts/prepare-hosting.cjs y copia exclusivamente ocho recursos públicos en hosting-dist. No publica funciones, reglas ni archivos de datos internos.
+El sitio principal es https://manager-fesicol.web.app.

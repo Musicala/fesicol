@@ -1,3 +1,4 @@
+import * as GmailPrefacturas from "./gmail-prefacturas.js?v=20261021-1";
 import { siguienteMes, validarPlanilla, reconocerPeriodo } from "./planilla-control.js?v=20261019-3";
 /* =========================================================
    Panel FESICOL · Musicala — app.js (Firestore)
@@ -1363,22 +1364,75 @@ async function descargarPreFactura(p) {
 }
 
 async function enviarPreFactura(p) {
-  if (!confirm(`Se enviará la prefactura ${numeroPreFactura(p)} a ${PREFACTURA_DESTINATARIO}. ¿Continuar?`)) return;
-  setLoading(true, "Generando y enviando prefactura…");
+  if (!isAdmin()) return;
+  const { REMITENTE, PARA, COPIA } = GmailPrefacturas;
+  const asunto = `Prefactura Musicala ${numeroPreFactura(p)} – ${ciclosDePreFactura(p).join(" / ")} – ${p.periodo || ""}`;
+  const mensaje = `Buen día,
+
+Adjuntamos la prefactura correspondiente a ${ciclosDePreFactura(p).join(" / ")}, periodo ${p.periodo || ""}, para su revisión y validación previa a la emisión de la factura electrónica.
+
+Quedamos atentos a sus comentarios.
+
+Cordialmente,
+Administración Musicala`;
+  openModal("Revisar correo antes de enviar", `
+    <p><strong>De:</strong> ${REMITENTE}<br><strong>Para:</strong> ${PARA.join("; ")}<br><strong>CC:</strong> ${COPIA.join("; ")}</p>
+    ${p.enviadoAt ? `<div class="alert warn">Esta prefactura ya registra un envío. Confirma que necesitas reenviarla.</div>` : ""}
+    <label class="field"><span>Asunto</span><input id="correoAsunto" maxlength="200" value="${esc(asunto)}"></label>
+    <label class="field"><span>Mensaje</span><textarea id="correoMensaje" rows="10">${esc(mensaje)}</textarea></label>
+    <p><strong>Adjunto:</strong> ${esc(numeroPreFactura(p))}.pdf · ${formatCOP(p.total)}</p>
+    <div id="correoEstado" class="alert info" role="status">Preparando vista previa y conexión de Google…</div>
+    <div class="form-row"><button class="btn secondary" id="correoPdf" disabled>Ver PDF adjunto</button><button class="btn secondary" id="correoConectar" disabled>Conectar ${REMITENTE}</button><button class="btn primary" id="correoEnviar" disabled>Confirmar y enviar</button></div>
+    <p class="muted sm">La autorización de Gmail se conserva solo en esta sesión de la página. Conectar la cuenta no envía el correo.</p>`);
+  const estado = $("#correoEstado"), conectar = $("#correoConectar"), enviar = $("#correoEnviar"), verPdf = $("#correoPdf");
+  let pdfBase64, envioEnCurso = false, enviado = false;
+  const actualizar = () => {
+    conectar.disabled = envioEnCurso || enviado;
+    enviar.disabled = envioEnCurso || enviado || !GmailPrefacturas.gmailConectado();
+    estado.textContent = GmailPrefacturas.gmailConectado() ? `Cuenta verificada: ${REMITENTE}. Revisa el correo y pulsa Confirmar y enviar.` : `Conecta ${REMITENTE} para habilitar el envío.`;
+  };
   try {
-    const pdf = await generarPdfPreFactura(p);
-    const pdfBase64 = pdf.output("datauristring").split(",")[1];
-    const token = await auth.currentUser.getIdToken();
-    const response = await fetch(`https://us-central1-${firebaseConfig.projectId}.cloudfunctions.net/enviarPreFactura`, {
-      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ data: { preFacturaId: p.id, numeroPreFactura: numeroPreFactura(p), destinatario: PREFACTURA_DESTINATARIO, pdfBase64 } })
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || result?.error) throw new Error(result?.error?.message || "El servicio de correo no respondió correctamente.");
-    await refresh(); closeModal(); toast(`Prefactura enviada a ${PREFACTURA_DESTINATARIO} ✅`, "success", 5000);
-  } catch (err) {
-    console.error(err); toast("No se envió la prefactura: " + (err?.message || err), "error", 7000);
-  } finally { setLoading(false); }
+    const [pdf] = await Promise.all([generarPdfPreFactura(p), GmailPrefacturas.cargarGmail()]);
+    pdfBase64 = pdf.output("datauristring").split(",")[1];
+    verPdf.disabled = false;
+    verPdf.onclick = () => {
+      const url = URL.createObjectURL(pdf.output("blob"));
+      window.open(url, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(url), 300000);
+    };
+    actualizar();
+  } catch (e) { estado.textContent = e.message; return; }
+  conectar.onclick = async () => {
+    conectar.disabled = true;
+    try { await GmailPrefacturas.conectarGmail(); actualizar(); }
+    catch (e) { conectar.disabled = false; estado.textContent = e.message; }
+  };
+  enviar.onclick = async () => {
+    if (envioEnCurso || enviado || !isAdmin()) return;
+    if (p.enviadoAt && !confirm("Esta prefactura ya fue enviada. ¿Confirmas que deseas reenviarla?")) return;
+    const datos = { asunto: $("#correoAsunto").value, mensaje: $("#correoMensaje").value, pdfBase64, nombrePdf: `${numeroPreFactura(p)}.pdf` };
+    try { GmailPrefacturas.construirCorreo(datos); } catch (e) { estado.textContent = e.message; return; }
+    envioEnCurso = true; conectar.disabled = true; enviar.disabled = true;
+    $("#correoAsunto").disabled = true; $("#correoMensaje").disabled = true;
+    estado.textContent = "Enviando correo mediante Gmail…";
+    try {
+      const id = await GmailPrefacturas.enviarCorreoGmail(datos);
+      enviado = true;
+      estado.textContent = `Gmail aceptó el envío desde ${REMITENTE} a los tres destinatarios. ID: ${id}`;
+      const registro = { enviadoAt: new Date().toISOString(), enviadoA: [...PARA, ...COPIA].join(", "), remitente: REMITENTE, enviadoPor: auth.currentUser?.email || "", ultimoCorreoId: id, correoAsunto: datos.asunto, correoMensaje: datos.mensaje };
+      Object.assign(p, registro);
+      try { await DB.updatePreFacturaEstado(p.id, p.estado, registro); }
+      catch (_) { estado.textContent += " No se pudo guardar la constancia en FESICOL; no vuelvas a enviar. Consulta Enviados en Gmail."; }
+      toast("Gmail aceptó el envío de la prefactura ✅", "success", 6000);
+    } catch (e) {
+      estado.textContent = e.message;
+      // Un resultado incierto exige revisar Gmail antes de reabrir el envío.
+      if (e.message.includes("Revisa Enviados")) enviado = true;
+      else enviar.disabled = !GmailPrefacturas.gmailConectado();
+      conectar.disabled = enviado;
+      $("#correoAsunto").disabled = false; $("#correoMensaje").disabled = false;
+    } finally { envioEnCurso = false; }
+  };
 }
 
 function ciclosDePreFactura(p) {
