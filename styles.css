@@ -1443,3 +1443,7 @@ hr{
 .ins-sort span { color: var(--primary, #1340c9); }
 .ins-sort:hover { text-decoration: underline; }
 .ins-sort:focus-visible { outline: 2px solid #1340c9; outline-offset: 4px; border-radius: 3px; }
+
+/* Confirmacion del envio de prefacturas */
+.alert.success{background:#ecfdf5;border-color:#86efac;color:#166534;}
+.alert.success .muted{color:#166534;}

@@ -1418,11 +1418,27 @@ Administración Musicala`;
     try {
       const id = await GmailPrefacturas.enviarCorreoGmail(datos);
       enviado = true;
-      estado.textContent = `Gmail aceptó el envío desde ${REMITENTE} a los tres destinatarios. ID: ${id}`;
+      estado.className = "alert success";
+      estado.setAttribute("tabindex", "-1");
+      estado.innerHTML = `<strong>✓ Prefactura enviada correctamente</strong><br>Desde ${esc(REMITENTE)} a ${esc([...PARA, ...COPIA].join(", "))}.<br><span class="muted sm">Gmail confirmó la aceptación del mensaje. Referencia: ${esc(id)}.</span>`;
+      estado.scrollIntoView({ behavior: "smooth", block: "center" });
+      estado.focus({ preventScroll: true });
+      conectar.hidden = true;
+      enviar.hidden = true;
+      const volver = document.createElement("button");
+      volver.type = "button"; volver.className = "btn primary";
+      volver.textContent = "Listo · Volver a Facturación";
+      volver.onclick = async () => { closeModal(); await refresh(); };
+      enviar.parentElement.appendChild(volver);
       const registro = { enviadoAt: new Date().toISOString(), enviadoA: [...PARA, ...COPIA].join(", "), remitente: REMITENTE, enviadoPor: auth.currentUser?.email || "", ultimoCorreoId: id, correoAsunto: datos.asunto, correoMensaje: datos.mensaje };
       Object.assign(p, registro);
       try { await DB.updatePreFacturaEstado(p.id, p.estado, registro); }
-      catch (_) { estado.textContent += " No se pudo guardar la constancia en FESICOL; no vuelvas a enviar. Consulta Enviados en Gmail."; }
+      catch (_) {
+        estado.className = "alert warn";
+        const aviso = document.createElement("p");
+        aviso.textContent = "El correo sí fue enviado, pero no se pudo guardar la constancia en FESICOL. No vuelvas a enviar; consulta Enviados en Gmail.";
+        estado.appendChild(aviso);
+      }
       toast("Gmail aceptó el envío de la prefactura ✅", "success", 6000);
     } catch (e) {
       estado.textContent = e.message;
