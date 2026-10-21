@@ -6,6 +6,11 @@
       "ignore": ["node_modules", ".git", "firebase-debug.log"]
     }
   ],
+  "hosting": {
+    "site": "manager-fesicol",
+    "public": ".",
+    "ignore": ["firebase.json", "firestore.rules", "storage.rules", "**/.*", "**/node_modules/**", "functions/**", "tmp/**", "**/*debug*.log", "RIP-INTEGRACION.md", "SETUP.md", "README.md"]
+  },
   "firestore": { "rules": "firestore.rules" },
   "storage": { "rules": "storage.rules" }
 }

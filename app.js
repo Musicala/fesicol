@@ -6,8 +6,9 @@ import { siguienteMes, validarPlanilla, reconocerPeriodo } from "./planilla-cont
 ========================================================= */
 
 import { initFirebase } from "./firebase.js";
-import * as DB from "./db.js?v=20261019-3";
-import { formatCOP, parsePrice } from "./db.js?v=20261019-3";
+import * as DB from "./db.js?v=20261021-sync1";
+import { formatCOP, parsePrice } from "./db.js?v=20261021-sync1";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-functions.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBoZuK8koOeOhl2nBrqyUoEznpkqnnrTbs",
@@ -27,6 +28,7 @@ const ADMIN_EMAILS = [
   "alekcaballeromusic@gmail.com",
   "catalina.medina.leal@gmail.com",
   "adminmusicala@gmail.com",
+  "imusicala@gmail.com",
   "musicalaasesor@gmail.com"
 ];
 const isAdminEmail = (email) => ADMIN_EMAILS.includes(String(email || "").trim().toLowerCase());
@@ -268,7 +270,10 @@ const views = {
   usuarios: { title: "Usuarios", subtitle: "Quién puede acceder al panel", render: renderUsuarios, admin: true }
 };
 
+let stopRipSyncWatch = null;
 async function navigate(view) {
+  stopRipSyncWatch?.();
+  stopRipSyncWatch = null;
   if (!views[view]) view = "resumen";
   if (views[view].admin && !isAdmin()) view = "resumen";
   state.view = view;
@@ -380,8 +385,10 @@ async function renderResumen() {
 
 /* ---------- CICLOS ---------- */
 async function renderCiclos() {
-  $("#topbarActions").innerHTML = adminOnly(`<button class="btn primary sm" id="addCiclo">+ Nuevo ciclo</button>`);
+  $("#topbarActions").innerHTML = adminOnly(`<button class="btn secondary sm" id="syncRipSelectedCycle" disabled title="Selecciona un ciclo de la tabla">Sincronizar pago y planes</button><button class="btn primary sm" id="addCiclo">+ Nuevo ciclo</button>`);
   $("#addCiclo") && ($("#addCiclo").onclick = () => formCiclo());
+  const syncSelectedButton = $("#syncRipSelectedCycle");
+  if (syncSelectedButton) syncSelectedButton.onclick = () => sincronizarPagoYPlanes(syncSelectedButton.dataset.cicloId, syncSelectedButton);
 
   const hoy = todayISO();
   const rows = state.ciclos.map((c) => {
@@ -400,13 +407,18 @@ async function renderCiclos() {
   }).join("") || `<tr><td colspan="6" class="muted">Sin ciclos. Crea el primero.</td></tr>`;
 
   content.innerHTML = `<section class="panel cycle-list-panel">
-    <div class="panel-heading"><div><h3>Ciclos y horarios</h3><p class="muted sm">Selecciona un ciclo para ver sus estudiantes, servicios e información completa.</p></div></div>
+    <div class="panel-heading"><div><h3>Ciclos y horarios</h3><p class="muted sm">Selecciona un ciclo para ver sus estudiantes y sincronizar su pago y planes con RIP y Wix.</p></div></div>
     <div class="table-wrap"><table class="data-table">
     <thead><tr><th>Ciclo</th><th>Límite inscripción</th><th>Inicio clases</th><th>Estado</th><th>Inscritos</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table></div></section>
     <section id="cycleDetail" aria-live="polite"></section>`;
 
   const openCycle = (id) => {
+    if (syncSelectedButton) {
+      syncSelectedButton.dataset.cicloId = id;
+      syncSelectedButton.disabled = false;
+      syncSelectedButton.title = `Sincronizar ${state.ciclos.find(c => c.id === id)?.nombre || "ciclo"} con RIP y Wix`;
+    }
     content.querySelectorAll(".cycle-row").forEach((row) => row.classList.toggle("selected", row.dataset.cycle === id));
     renderCycleDetail(id);
   };
@@ -468,12 +480,53 @@ function renderCycleDetail(cicloId) {
       <div><span>Servicios inscritos</span><strong>${inscripciones.length}</strong></div>
       <div><span>Valor del ciclo</span><strong>${formatCOP(total)}</strong></div>
     </div>
+    <div class="alert info">
+      <strong>Pago Fesicol en RIP</strong>
+      <p id="ripSyncStatus">Consultando sincronización…</p>
+      <a href="https://rip-musicala.web.app" target="_blank" rel="noopener">Abrir RIP → Clientes</a>
+      ${adminOnly(`<button class="btn secondary sm" id="syncRipCycle">Sincronizar pago y planes</button>`)}
+    </div>
     <div class="table-wrap"><table class="data-table">
       <thead><tr><th>Estudiante</th><th>Solicitado por</th><th>Servicio / modalidad</th><th>Duración</th><th>Mes</th><th>Precio</th><th>Estado</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
   </section>`;
+  // El observador se libera al seleccionar otro ciclo o salir de esta vista.
+  stopRipSyncWatch?.();
+  stopRipSyncWatch = DB.watchRipSincronizacion(cicloId, (status) => {
+    const label = target.querySelector("#ripSyncStatus");
+    if (!label) return;
+    label.textContent = status?.estado === "sincronizado"
+      ? status.empty ? "Este ciclo no tiene inscripciones para enviar."
+        : `Pago sincronizado: ${status.usuarios} beneficiario(s) · ${formatCOP(status.total)}. Consulta los planes Wix y asocia la factura en Clientes de RIP.`
+      : status?.estado === "error" ? status.error
+        : "Las inscripciones nuevas se envían automáticamente. Usa Sincronizar pago y planes para enviar las existentes o reintentar.";
+  }, () => {
+    const label = target.querySelector("#ripSyncStatus");
+    if (label) label.textContent = "No fue posible consultar la sincronización. Vuelve a abrir el ciclo.";
+  });
+  const syncButton = target.querySelector("#syncRipCycle");
+  if (syncButton) syncButton.onclick = () => sincronizarPagoYPlanes(cicloId, syncButton);
   target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+const ciclosSincronizandoRIP = new Set();
+async function sincronizarPagoYPlanes(cicloId, button) {
+  if (!isAdmin() || !cicloId || ciclosSincronizandoRIP.has(cicloId)) return;
+  ciclosSincronizandoRIP.add(cicloId);
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Sincronizando…";
+  try {
+    await httpsCallable(getFunctions(fb.app, "us-central1"), "sincronizarCicloRIP")({ cicloId });
+    toast("Pago sincronizado. Consulta la activación de planes Wix en Clientes de RIP.", "success", 6000);
+  } catch (error) {
+    toast(error.message || "No se pudo sincronizar. Revisa la configuración de la integración.", "error", 7000);
+  } finally {
+    ciclosSincronizandoRIP.delete(cicloId);
+    button.textContent = label;
+    button.disabled = false;
+  }
 }
 
 function formCiclo(c = null) {
@@ -665,6 +718,7 @@ function formEstudiante(s = null) {
         <label class="field"><span>Nombre del inscrito</span><input name="nombre" value="${esc(s?.nombre || "")}" required></label>
         <label class="field"><span>Edad</span><input name="edad" type="number" value="${esc(s?.edad || "")}"></label>
       </div>
+      <label class="field"><span>Correo del miembro Wix</span><input name="wixEmail" type="email" value="${esc(s?.wixEmail || s?.email || s?.correo || "")}" placeholder="Correo con el que reserva en Wix"><small>Se usa para activar su plan al inscribirlo en Fesicol.</small></label>
       <div class="field"><span>Asociados (quién(es) lo inscriben)</span>
         <div id="asocList">${asocsIniciales.map(filaAsoc).join("")}</div>
         <button type="button" class="btn secondary sm" id="addAsoc">+ Agregar asociado</button>

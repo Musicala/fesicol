@@ -297,6 +297,11 @@ export function watchInscripciones(cb) {
   );
 }
 
+export function watchRipSincronizacion(cicloId, cb, onError) {
+  return onSnapshot(doc(_db, "ripSincronizaciones", cicloId), snap =>
+    cb(snap.exists() ? snap.data() : null), onError);
+}
+
 export async function getInscripcionesByCiclo(cicloId) {
   const qs = await getDocs(
     query(col("inscripciones"), where("cicloId", "==", cicloId))
