@@ -1,4 +1,5 @@
-import * as GmailPrefacturas from "./gmail-prefacturas.js?v=20261021-1";
+import * as CorreoProgramado from "./correo-programado.js?v=20261021-3";
+import * as GmailPrefacturas from "./gmail-prefacturas.js?v=20261021-3";
 import { siguienteMes, validarPlanilla, reconocerPeriodo } from "./planilla-control.js?v=20261019-3";
 /* =========================================================
    Panel FESICOL · Musicala — app.js (Firestore)
@@ -1383,12 +1384,86 @@ Administración Musicala`;
     <p><strong>Adjunto:</strong> ${esc(numeroPreFactura(p))}.pdf · ${formatCOP(p.total)}</p>
     <div id="correoEstado" class="alert info" role="status">Preparando vista previa y conexión de Google…</div>
     <div class="form-row"><button class="btn secondary" id="correoPdf" disabled>Ver PDF adjunto</button><button class="btn secondary" id="correoConectar" disabled>Conectar ${REMITENTE}</button><button class="btn primary" id="correoEnviar" disabled>Confirmar y enviar</button></div>
-    <p class="muted sm">La autorización de Gmail se conserva solo en esta sesión de la página. Conectar la cuenta no envía el correo.</p>`);
+    <p class="muted sm">La conexión manual de Gmail dura esta sesión. Para enviar con la página cerrada, configura Gmail automático abajo.</p>
+    <section class="panel" style="margin-top:16px">
+      <h3>Envío automático · día 20 a las 10:00 a. m.</h3>
+      <p>Hora de Colombia. Se enviará solo esta prefactura confirmada, si no se ha enviado y si la planilla, inscritos y datos siguen sin cambios.</p>
+      <div id="autoEstado" class="alert info" role="status">Consultando programación…</div>
+      <details><summary>Conectar Gmail para envío automático</summary>
+        <p>Esta conexión permite enviar desde adminmusicala@gmail.com aunque la aplicación esté cerrada. Autorizar la cuenta no envía correos.</p>
+        <p>En Google Cloud → Clientes → cliente web, agrega esta URI de redireccionamiento y conserva las existentes:</p>
+        <input readonly aria-label="URI de retorno de Gmail automático" value="${CorreoProgramado.CALLBACK}" style="width:100%">
+        <label class="field"><span>Archivo del secreto OAuth (solo la primera configuración)</span><input id="autoSecreto" type="file" accept=".txt,.json"></label>
+        <button class="btn secondary" id="autoConectar" type="button">Conectar Gmail automático</button>
+      </details>
+      <label style="display:block;margin:16px 0"><input type="checkbox" id="autoRevision"> Revisé la planilla, los inscritos, los valores, el mensaje y el PDF; autorizo este envío automático.</label>
+      <div class="form-row"><button class="btn primary" id="autoProgramar" type="button" disabled>Confirmar y programar · día 20, 10:00 a. m.</button><button class="btn secondary" id="autoCancelar" type="button" hidden>Cancelar programación</button></div>
+    </section>`);
   const estado = $("#correoEstado"), conectar = $("#correoConectar"), enviar = $("#correoEnviar"), verPdf = $("#correoPdf");
-  let pdfBase64, envioEnCurso = false, enviado = false;
+  let pdfBase64, envioEnCurso = false, enviado = false, reservaManual = null;
+  const autoEstado = $("#autoEstado"), autoProgramar = $("#autoProgramar"), autoCancelar = $("#autoCancelar"), autoRevision = $("#autoRevision");
+  let estadoAuto = null, programando = false;
+  const actualizarAuto = async (recuperarContenido = false) => {
+    try {
+      estadoAuto = await CorreoProgramado.llamar("fesicolCorreoEstado", {preFacturaId:p.id,incluirContenido:recuperarContenido});
+      const j = estadoAuto.prefactura;
+      if (recuperarContenido && j.correo) {
+        $("#correoAsunto").value = j.correo.asunto;
+        $("#correoMensaje").value = j.correo.mensaje;
+        pdfBase64 = j.correo.pdfBase64;
+      }
+      autoEstado.className = `alert ${j.estado === "programado" || j.estado === "enviado" ? "success" : "info"}`;
+      autoEstado.textContent = j.estado === "programado" ? `Programada para ${new Date(j.fecha).toLocaleString("es-CO",{timeZone:"America/Bogota"})}, hora de Colombia. Mensaje y PDF aprobados guardados.` : j.estado === "enviado" || p.enviadoAt ? "Esta prefactura ya fue enviada. No se enviará automáticamente otra vez." : `${estadoAuto.conectado ? "Gmail automático conectado." : "Falta conectar Gmail automático."} Estado: ${j.estado.replaceAll("_"," ")}. ${j.aviso || ""}`;
+      autoCancelar.hidden = j.estado !== "programado";
+      const pasada = new Date(`${p.periodo}-20T10:00:00-05:00`) <= new Date();
+      if (pasada && !p.enviadoAt && j.estado !== "enviado") autoEstado.textContent += " La fecha del día 20 ya pasó para este periodo; envía esta prefactura manualmente.";
+      autoProgramar.disabled = programando || !pdfBase64 || !autoRevision.checked || !estadoAuto.conectado || !!p.enviadoAt || pasada || ["enviando","enviando_manual","incierto","enviado"].includes(j.estado);
+    } catch (e) { autoEstado.textContent = `No se pudo consultar la programación: ${CorreoProgramado.textoError(e)}`;autoProgramar.disabled = true; }
+  };
+  autoRevision.onchange = () => actualizarAuto();
+  $("#autoConectar").onclick = async () => {
+    const b = $("#autoConectar"); b.disabled = true;
+    try { await CorreoProgramado.conectar($("#autoSecreto").files[0]); }
+    catch(e) { autoEstado.textContent = CorreoProgramado.textoError(e); b.disabled = false; }
+  };
+  autoProgramar.onclick = async () => {
+    if (programando || !autoRevision.checked || !estadoAuto) return;
+    programando = true; autoProgramar.disabled = true;
+    $("#correoAsunto").readOnly = true; $("#correoMensaje").readOnly = true;
+    enviar.disabled = true; conectar.disabled = true;
+    try {
+      const correo = {asunto:$("#correoAsunto").value,mensaje:$("#correoMensaje").value,pdfBase64,nombrePdf:`${numeroPreFactura(p)}.pdf`};
+      const r = await CorreoProgramado.llamar("fesicolProgramarPrefactura", {preFacturaId:p.id,revisionConfirmada:true,sourceHash:estadoAuto.prefactura.sourceHash,hashPrefactura:await CorreoProgramado.hashPrefactura(p),correo});
+      p.correoAutomaticoEstado = "programado";p.correoAutomaticoFecha = r.fecha;
+      toast("Prefactura aprobada y programada para el día 20 a las 10:00 a. m. ✅","success",6000);
+    } catch(e) { autoEstado.className="alert warn";autoEstado.textContent=CorreoProgramado.textoError(e);programando=false;autoProgramar.disabled=false;
+      $("#correoAsunto").readOnly=false;$("#correoMensaje").readOnly=false;actualizar();return; }
+    programando=false;
+    $("#correoAsunto").readOnly=false;$("#correoMensaje").readOnly=false;
+    actualizar(); await actualizarAuto();
+  };
+  autoCancelar.onclick = async () => {
+    autoCancelar.disabled=true;
+    try { await CorreoProgramado.llamar("fesicolCancelarProgramacion",{preFacturaId:p.id});autoRevision.checked=false;await actualizarAuto(); }
+    catch(e) { autoEstado.textContent=CorreoProgramado.textoError(e); }
+    finally { autoCancelar.disabled=false; }
+  };
+  let cancelandoCambios = false;
+  const cancelarPorCambios = async () => {
+    autoRevision.checked=false;
+    if (estadoAuto?.prefactura.estado === "programado" && !cancelandoCambios) {
+      cancelandoCambios=true;
+      try { await CorreoProgramado.llamar("fesicolCancelarProgramacion",{preFacturaId:p.id});await actualizarAuto();autoEstado.textContent += " Editaste el mensaje. Vuelve a revisarlo y programarlo."; }
+      catch(e) { autoEstado.className="alert warn";autoEstado.textContent=`No se pudo cancelar la versión aprobada: ${CorreoProgramado.textoError(e)}`; }
+      finally { cancelandoCambios=false; }
+    }
+    autoProgramar.disabled=true;
+  };
+  $("#correoAsunto").addEventListener("input",cancelarPorCambios);
+  $("#correoMensaje").addEventListener("input",cancelarPorCambios);
   const actualizar = () => {
-    conectar.disabled = envioEnCurso || enviado;
-    enviar.disabled = envioEnCurso || enviado || !GmailPrefacturas.gmailConectado();
+    conectar.disabled = envioEnCurso || enviado || programando;
+    enviar.disabled = envioEnCurso || enviado || programando || !GmailPrefacturas.gmailConectado();
     estado.textContent = GmailPrefacturas.gmailConectado() ? `Cuenta verificada: ${REMITENTE}. Revisa el correo y pulsa Confirmar y enviar.` : `Conecta ${REMITENTE} para habilitar el envío.`;
   };
   try {
@@ -1396,11 +1471,13 @@ Administración Musicala`;
     pdfBase64 = pdf.output("datauristring").split(",")[1];
     verPdf.disabled = false;
     verPdf.onclick = () => {
-      const url = URL.createObjectURL(pdf.output("blob"));
+      const bytes = Uint8Array.from(atob(pdfBase64),c=>c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes],{type:"application/pdf"}));
       window.open(url, "_blank", "noopener");
       setTimeout(() => URL.revokeObjectURL(url), 300000);
     };
     actualizar();
+    await actualizarAuto(true);
   } catch (e) { estado.textContent = e.message; return; }
   conectar.onclick = async () => {
     conectar.disabled = true;
@@ -1408,7 +1485,7 @@ Administración Musicala`;
     catch (e) { conectar.disabled = false; estado.textContent = e.message; }
   };
   enviar.onclick = async () => {
-    if (envioEnCurso || enviado || !isAdmin()) return;
+    if (envioEnCurso || enviado || programando || !isAdmin()) return;
     if (p.enviadoAt && !confirm("Esta prefactura ya fue enviada. ¿Confirmas que deseas reenviarla?")) return;
     const datos = { asunto: $("#correoAsunto").value, mensaje: $("#correoMensaje").value, pdfBase64, nombrePdf: `${numeroPreFactura(p)}.pdf` };
     try { GmailPrefacturas.construirCorreo(datos); } catch (e) { estado.textContent = e.message; return; }
@@ -1416,6 +1493,8 @@ Administración Musicala`;
     $("#correoAsunto").disabled = true; $("#correoMensaje").disabled = true;
     estado.textContent = "Enviando correo mediante Gmail…";
     try {
+      if (!GmailPrefacturas.gmailConectado()) throw new Error("Conecta Gmail antes de enviar.");
+      reservaManual = await CorreoProgramado.llamar("fesicolReservarEnvioManual",{preFacturaId:p.id,reenviar:!!p.enviadoAt});
       const id = await GmailPrefacturas.enviarCorreoGmail(datos);
       enviado = true;
       estado.className = "alert success";
@@ -1432,7 +1511,10 @@ Administración Musicala`;
       enviar.parentElement.appendChild(volver);
       const registro = { enviadoAt: new Date().toISOString(), enviadoA: [...PARA, ...COPIA].join(", "), remitente: REMITENTE, enviadoPor: auth.currentUser?.email || "", ultimoCorreoId: id, correoAsunto: datos.asunto, correoMensaje: datos.mensaje };
       Object.assign(p, registro);
-      try { await DB.updatePreFacturaEstado(p.id, p.estado, registro); }
+      try {
+        await CorreoProgramado.llamar("fesicolFinalizarEnvioManual",{preFacturaId:p.id,intento:reservaManual.intento,registro});
+        await actualizarAuto();
+      }
       catch (_) {
         estado.className = "alert warn";
         const aviso = document.createElement("p");
@@ -1441,10 +1523,15 @@ Administración Musicala`;
       }
       toast("Gmail aceptó el envío de la prefactura ✅", "success", 6000);
     } catch (e) {
+      if (reservaManual) {
+        try { await CorreoProgramado.llamar("fesicolFinalizarEnvioManual",{preFacturaId:p.id,intento:reservaManual.intento,httpStatus:e.httpStatus || null}); }
+        catch(_) { /* La reserva se conserva; no repetir automáticamente. */ }
+        if (!e.httpStatus || e.httpStatus >= 500) enviado = true;
+      }
       estado.textContent = e.message;
       // Un resultado incierto exige revisar Gmail antes de reabrir el envío.
       if (e.message.includes("Revisa Enviados")) enviado = true;
-      else enviar.disabled = !GmailPrefacturas.gmailConectado();
+      else enviar.disabled = enviado || !GmailPrefacturas.gmailConectado();
       conectar.disabled = enviado;
       $("#correoAsunto").disabled = false; $("#correoMensaje").disabled = false;
     } finally { envioEnCurso = false; }
@@ -1481,6 +1568,7 @@ function verDatosPreviosFactura(p) {
     </div>
     <section class="panel" style="padding:.75rem"><table class="data-table"><thead><tr><th>Estudiante</th><th>Beneficiarios</th><th>Ciclo</th><th>Servicio</th><th>Duración</th><th>Valor</th></tr></thead><tbody>${detalle}</tbody></table></section>
     <div class="alert info" style="margin-top:12px"><strong>Prefactura ${esc(numeroPreFactura(p))}</strong><br><span class="muted sm">Documento previo, no válido como factura electrónica DIAN.</span></div>
+    ${p.correoAutomaticoEstado ? `<div class="alert ${p.correoAutomaticoEstado === "programado" || p.correoAutomaticoEstado === "enviado" ? "success" : "info"}"><strong>Envío automático:</strong> ${esc(p.correoAutomaticoEstado.replaceAll("_"," "))}${p.correoAutomaticoEstado === "programado" ? " · día 20, 10:00 a. m., Colombia" : ""}${p.correoAutomaticoAviso ? `<br>${esc(p.correoAutomaticoAviso)}` : ""}</div>` : ""}
     ${p.enviadoAt ? `<p class="muted sm">Último envío: ${esc(p.enviadoA || PREFACTURA_DESTINATARIO)}${p.enviadoPor ? ` · por ${esc(p.enviadoPor)}` : ""}</p>` : ""}
     <p class="muted sm" style="margin-top:12px">Estos datos quedan guardados aquí como paso previo; registrar la factura en el otro programa no modifica este detalle.</p>
     <div class="form-row"><button type="button" class="btn secondary" id="downloadPreFactura">⬇ Descargar PDF</button>${adminOnly(`${p.estado !== "Confirmado" ? `<button type="button" class="btn primary" id="confirmPreFactura">Confirmar datos</button>` : ""}${p.estado === "Confirmado" ? `<button type="button" class="btn primary" id="sendPreFactura">✉ Enviar a FESICOL</button>` : ""}${p.estado !== "Registrado externamente" ? `<button type="button" class="btn secondary" id="externalPreFactura">Marcar como registrado externamente</button>` : ""}`)}</div>`);

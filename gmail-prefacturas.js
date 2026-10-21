@@ -77,7 +77,9 @@ export async function enviarCorreoGmail(datos) {
   const resultado = await r.json().catch(() => ({}));
   if (!r.ok) {
     if (r.status === 401) conexion = null;
-    throw new Error(resultado.error?.message || "Gmail rechazó el envío.");
+    const error = new Error(resultado.error?.message || "Gmail rechazó el envío.");
+    error.httpStatus = r.status;
+    throw error;
   }
   if (!resultado.id) throw new Error("Gmail no devolvió confirmación. Revisa Enviados antes de intentar nuevamente.");
   return resultado.id;

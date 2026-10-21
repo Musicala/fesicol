@@ -8,6 +8,17 @@
         ".git",
         "firebase-debug.log"
       ]
+    },
+    {
+      "source": "functions-correo",
+      "codebase": "fesicol-correo",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "*.test.js",
+        ".env*",
+        "firebase-debug.log"
+      ]
     }
   ],
   "firestore": {
