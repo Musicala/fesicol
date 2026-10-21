@@ -67,9 +67,13 @@ Activado el 20 de octubre de 2026, con autorización del usuario:
   se eliminaron por completo. No se crearon pagos ni órdenes Wix de prueba.
 - RIP conserva los archivos publicados previamente, con tres archivos de
   interfaz actualizados para Fesicol (sin publicar otros cambios locales).
-- GitHub rechazó la escritura del repositorio (`Resource not accessible by
-  integration`). El enlace de GitHub Pages conserva su versión anterior;
-  usar el enlace Firebase para la versión integrada.
+- Tras resolver el acceso por Git, el 21 de octubre se publicaron los cambios
+  en `Musicala/fesicol` y `Musicala/RIP2026`, conservando las mejoras de
+  prefacturas por Gmail y su programación que ya estaban en el repositorio.
+- El Ciclo 9 tiene cinco pagos individuales para cuatro personas: los dos
+  paquetes de Juan Esteban fueron confirmados por el usuario como distintos.
+  Los movimientos están vinculados al mismo pago conjunto de Clientes y
+  las cinco activaciones Wix están confirmadas.
 
 El despliegue inicial de las tres funciones Fesicol se hizo desde
 `tmp/deploy-fesicol`, aislando sus exportaciones para no desplegar ni exigir
